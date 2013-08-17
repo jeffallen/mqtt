@@ -18,6 +18,7 @@ type subscriptions struct {
 	mu        sync.Mutex // guards access to fields below
 	subs      map[string][]*connection
 	wildcards []wild
+	retain		map[string]*proto.Publish
 }
 
 // The length of the queue that subscription processing
@@ -27,6 +28,7 @@ const postQueue = 100
 func newSubscriptions(workers int) *subscriptions {
 	s := &subscriptions{
 		subs:    make(map[string][]*connection),
+		retain:  make(map[string]*proto.Publish),
 		posts:   make(chan post, postQueue),
 		workers: workers,
 	}
@@ -34,6 +36,14 @@ func newSubscriptions(workers int) *subscriptions {
 		go s.run(i)
 	}
 	return s
+}
+
+func (s *subscriptions)sendRetain(topic string, c *connection) {
+	s.mu.Lock()
+				if message, ok := s.retain[topic]; ok {
+					c.submit(message)
+				}
+	s.mu.Unlock()
 }
 
 func (s *subscriptions) add(topic string, c *connection) {
@@ -158,11 +168,36 @@ func (s *subscriptions) run(id int) {
 	tag := fmt.Sprintf("worker %d ", id)
 	log.Print(tag, "started")
 	for post := range s.posts {
+
+		// Remember the original retain setting, but send out immediate
+		// copies without retain: "When a server sends a PUBLISH to a client
+		// as a result of a subscription that already existed when the
+		// original PUBLISH arrived, the Retain flag should not be set,
+		// regardless of the Retain flag of the original PUBLISH.
+		retain := post.m.Header.Retain
+		post.m.Header.Retain = false
+
+		if retain && post.m.Payload.Size() == 0 {
+			s.mu.Lock()
+			delete(s.retain, post.m.TopicName)
+			s.mu.Unlock()
+			// Once the "delete retain" is done, return.
+			return
+		}
+
+		// Find all the connections that should be notified of this message.
 		conns := s.subscribers(post.m.TopicName)
 		for _, c := range conns {
 			if c != nil {
 				c.submit(post.m)
 			}
+		}
+
+		if retain {
+			post.m.Header.Retain = true
+			s.mu.Lock()
+			s.retain[post.m.TopicName] = post.m
+			s.mu.Unlock()
 		}
 	}
 }
@@ -388,6 +423,15 @@ func (c *connection) reader() {
 				suback.TopicsQos[i] = proto.QosAtLeastOnce
 			}
 			c.submit(suback)
+
+			// Process retained messages.
+			for _, tq := range m.Topics {
+			if isWildcard(tq.Topic) {
+				// TODO: wildcard retains
+			} else {
+				c.svr.subs.sendRetain(tq.Topic, c)
+			}
+			}
 
 		case *proto.Unsubscribe:
 			for _, t := range m.Topics {
