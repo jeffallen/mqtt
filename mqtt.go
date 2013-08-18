@@ -18,7 +18,9 @@ type subscriptions struct {
 	mu        sync.Mutex // guards access to fields below
 	subs      map[string][]*connection
 	wildcards []wild
-	retain		map[string]*proto.Publish
+	// This map needs to hold copies of the proto.Publish, not pointers to
+	// it, or else we can send out one with the wrong retain flag.
+	retain		map[string]proto.Publish
 }
 
 // The length of the queue that subscription processing
@@ -28,7 +30,7 @@ const postQueue = 100
 func newSubscriptions(workers int) *subscriptions {
 	s := &subscriptions{
 		subs:    make(map[string][]*connection),
-		retain:  make(map[string]*proto.Publish),
+		retain:  make(map[string]proto.Publish),
 		posts:   make(chan post, postQueue),
 		workers: workers,
 	}
@@ -40,9 +42,17 @@ func newSubscriptions(workers int) *subscriptions {
 
 func (s *subscriptions)sendRetain(topic string, c *connection) {
 	s.mu.Lock()
-				if message, ok := s.retain[topic]; ok {
-					c.submit(message)
-				}
+	var tlist []string
+	if isWildcard(topic) {
+					// TODO: select matching topics from the retain map
+	} else {
+					tlist = []string{ topic }
+	}
+	for _,t := range tlist {
+		if message, ok := s.retain[t]; ok {
+		c.submit(&message)
+		}
+	}
 	s.mu.Unlock()
 }
 
@@ -177,11 +187,12 @@ func (s *subscriptions) run(id int) {
 		retain := post.m.Header.Retain
 		post.m.Header.Retain = false
 
+		// Handle "retain with payload size zero = delete retain".
+		// Once the delete is done, return instead of continuing.
 		if retain && post.m.Payload.Size() == 0 {
 			s.mu.Lock()
 			delete(s.retain, post.m.TopicName)
 			s.mu.Unlock()
-			// Once the "delete retain" is done, return.
 			return
 		}
 
@@ -194,9 +205,13 @@ func (s *subscriptions) run(id int) {
 		}
 
 		if retain {
-			post.m.Header.Retain = true
 			s.mu.Lock()
-			s.retain[post.m.TopicName] = post.m
+			// Save a copy of it, and set that copy's Retain to true, so that
+			// when we send it out later we notify new subscribers that this
+			// is an old message.
+			msg := *post.m
+			msg.Header.Retain = true
+			s.retain[post.m.TopicName] = msg
 			s.mu.Unlock()
 		}
 	}
@@ -426,11 +441,7 @@ func (c *connection) reader() {
 
 			// Process retained messages.
 			for _, tq := range m.Topics {
-			if isWildcard(tq.Topic) {
-				// TODO: wildcard retains
-			} else {
 				c.svr.subs.sendRetain(tq.Topic, c)
-			}
 			}
 
 		case *proto.Unsubscribe:
