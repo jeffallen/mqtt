@@ -503,7 +503,7 @@ func (c *IncomingConn) writer() {
 		if err != nil {
 			// This one is not interesting; it happens when clients
 			// disappear before we send their acks.
-			if err.String() == "use of closed network connection" {
+			if err.Error() == "use of closed network connection" {
 				return
 			}
 			log.Print("writer: ", err)
