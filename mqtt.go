@@ -2,8 +2,10 @@
 package mqtt
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"strings"
 	"sync"
@@ -16,11 +18,11 @@ type subscriptions struct {
 	posts   chan (post)
 
 	mu        sync.Mutex // guards access to fields below
-	subs      map[string][]*connection
+	subs      map[string][]*IncomingConn
 	wildcards []wild
 	// This map needs to hold copies of the proto.Publish, not pointers to
 	// it, or else we can send out one with the wrong retain flag.
-	retain		map[string]proto.Publish
+	retain map[string]proto.Publish
 }
 
 // The length of the queue that subscription processing
@@ -29,7 +31,7 @@ const postQueue = 100
 
 func newSubscriptions(workers int) *subscriptions {
 	s := &subscriptions{
-		subs:    make(map[string][]*connection),
+		subs:    make(map[string][]*IncomingConn),
 		retain:  make(map[string]proto.Publish),
 		posts:   make(chan post, postQueue),
 		workers: workers,
@@ -40,23 +42,23 @@ func newSubscriptions(workers int) *subscriptions {
 	return s
 }
 
-func (s *subscriptions)sendRetain(topic string, c *connection) {
+func (s *subscriptions) sendRetain(topic string, c *IncomingConn) {
 	s.mu.Lock()
 	var tlist []string
 	if isWildcard(topic) {
-					// TODO: select matching topics from the retain map
+		// TODO: select matching topics from the retain map
 	} else {
-					tlist = []string{ topic }
+		tlist = []string{topic}
 	}
-	for _,t := range tlist {
+	for _, t := range tlist {
 		if message, ok := s.retain[t]; ok {
-		c.submit(&message)
+			c.submit(&message)
 		}
 	}
 	s.mu.Unlock()
 }
 
-func (s *subscriptions) add(topic string, c *connection) {
+func (s *subscriptions) add(topic string, c *IncomingConn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if isWildcard(topic) {
@@ -71,10 +73,10 @@ func (s *subscriptions) add(topic string, c *connection) {
 
 type wild struct {
 	wild []string
-	c    *connection
+	c    *IncomingConn
 }
 
-func newWild(topic string, c *connection) wild {
+func newWild(topic string, c *IncomingConn) wild {
 	return wild{wild: strings.Split(topic, "/"), c: c}
 }
 
@@ -108,7 +110,7 @@ func (w wild) matches(parts []string) bool {
 }
 
 // Find all connections that are subscribed to this topic.
-func (s *subscriptions) subscribers(topic string) []*connection {
+func (s *subscriptions) subscribers(topic string) []*IncomingConn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -127,7 +129,7 @@ func (s *subscriptions) subscribers(topic string) []*connection {
 }
 
 // Remove all subscriptions that refer to a connection.
-func (s *subscriptions) unsubAll(c *connection) {
+func (s *subscriptions) unsubAll(c *IncomingConn) {
 	s.mu.Lock()
 	for _, v := range s.subs {
 		for i := range v {
@@ -150,7 +152,7 @@ func (s *subscriptions) unsubAll(c *connection) {
 }
 
 // Remove the subscription to topic for a given connection.
-func (s *subscriptions) unsub(topic string, c *connection) {
+func (s *subscriptions) unsub(topic string, c *IncomingConn) {
 	s.mu.Lock()
 	if subs, ok := s.subs[topic]; ok {
 		nils := 0
@@ -217,68 +219,80 @@ func (s *subscriptions) run(id int) {
 	}
 }
 
-func (s *subscriptions) submit(c *connection, m *proto.Publish) {
+func (s *subscriptions) submit(c *IncomingConn, m *proto.Publish) {
 	s.posts <- post{c: c, m: m}
 }
 
 // A post is a unit of work for the subscription processing workers.
 type post struct {
-	c *connection
+	c *IncomingConn
 	m *proto.Publish
 }
 
+// A Server holds all the state associated with an MQTT server.
 type Server struct {
 	l    net.Listener
-	Done chan bool
+	Done chan struct{}
 	subs *subscriptions
 }
 
+// NewServer creates a new MQTT server, which accepts connects from
+// the given listener. When the server is stopped (for instance by
+// another goroutine closing the net.Listener), channel Done will become
+// readable.
 func NewServer(l net.Listener) *Server {
-	s := &Server{
+	return &Server{
 		l:    l,
-		Done: make(chan bool),
-		subs: newSubscriptions(2), // 2 workers for now, to see it working
+		Done: make(chan struct{}),
+		subs: newSubscriptions(2), // 2 workers for now, to see it working in parallel
 	}
-
-	go s.run()
-	return s
 }
 
-func (s *Server) run() {
-	for {
-		conn, err := s.l.Accept()
-		if err != nil {
-			log.Print("Accept", err)
+// Start makes the Server start accepting and handling connections.
+func (s *Server) Start() {
+	go func() {
+		for {
+			conn, err := s.l.Accept()
+			if err != nil {
+				log.Print("Accept", err)
+				break
+			}
+
+			cli := s.NewIncomingConn(conn)
+			cli.Start()
 		}
-
-		cli := newConnection(s, conn)
-		go cli.reader()
-		go cli.writer()
-	}
+		close(s.Done)
+	}()
 }
 
-type connection struct {
+// An IncomingConn represents a connection into a Server.
+type IncomingConn struct {
 	svr      *Server
 	conn     net.Conn
 	jobs     chan job
 	clientid string
+	Done     chan struct{}
 }
 
-var clients map[string]*connection = make(map[string]*connection)
+var clients map[string]*IncomingConn = make(map[string]*IncomingConn)
 var clientsMu sync.Mutex
 
 const sendingQueueLength = 100
 
-func newConnection(svr *Server, conn net.Conn) *connection {
-	return &connection{
-		svr:  svr,
+// NewIncomingConn creates a new IncomingConn associated with this
+// server. The connection becomes the property of the IncomingConn
+// and should not be touched again by the caller until the Done
+// channel becomes readable.
+func (s *Server) NewIncomingConn(conn net.Conn) *IncomingConn {
+	return &IncomingConn{
+		svr:  s,
 		conn: conn,
 		jobs: make(chan job, sendingQueueLength),
+		Done: make(chan struct{}),
 	}
 }
 
-type signal struct{}
-type receipt chan signal
+type receipt chan struct{}
 
 // Wait for the receipt to indicate that the job is done.
 func (r receipt) wait() {
@@ -291,9 +305,15 @@ type job struct {
 	r receipt
 }
 
+// Start reading and writing on this connection.
+func (c *IncomingConn) Start() {
+	go c.reader()
+	go c.writer()
+}
+
 // Add this	connection to the map, or find out that an existing connection
 // already exists for the same client-id.
-func (c *connection) add() *connection {
+func (c *IncomingConn) add() *IncomingConn {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 
@@ -308,7 +328,7 @@ func (c *connection) add() *connection {
 }
 
 // Delete a connection; the conection must be closed by the caller first.
-func (c *connection) del() {
+func (c *IncomingConn) del() {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	delete(clients, c.clientid)
@@ -317,7 +337,7 @@ func (c *connection) del() {
 
 // Replace any existing connection with this one. The one to be replaced,
 // if any, must be closed first by the caller.
-func (c *connection) replace() {
+func (c *IncomingConn) replace() {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 
@@ -346,7 +366,7 @@ func (c *connection) replace() {
 }
 
 // Queue a message; no notification of sending is done.
-func (c *connection) submit(m proto.Message) {
+func (c *IncomingConn) submit(m proto.Message) {
 	j := job{m: m}
 	c.jobs <- j
 	return
@@ -354,13 +374,13 @@ func (c *connection) submit(m proto.Message) {
 
 // Queue a message, returns a channel that will be readable
 // when the message is sent.
-func (c *connection) submitSync(m proto.Message) receipt {
+func (c *IncomingConn) submitSync(m proto.Message) receipt {
 	j := job{m: m, r: make(receipt)}
 	c.jobs <- j
 	return j.r
 }
 
-func (c *connection) reader() {
+func (c *IncomingConn) reader() {
 	// On exit, close the connection and arrange for the writer to exit
 	// by closing the output channel.
 	defer func() {
@@ -376,6 +396,8 @@ func (c *connection) reader() {
 			log.Print("reader: ", err)
 			return
 		}
+
+		// log.Printf("dump: %T", m)
 
 		switch m := m.(type) {
 		case *proto.Connect:
@@ -461,7 +483,7 @@ func (c *connection) reader() {
 	}
 }
 
-func (c *connection) writer() {
+func (c *IncomingConn) writer() {
 
 	// Close connection on exit in order to cause reader to exit.
 	defer func() {
@@ -472,11 +494,6 @@ func (c *connection) writer() {
 	}()
 
 	for job := range c.jobs {
-		if job.m == nil {
-			log.Print("writer: no message?")
-			return
-		}
-
 		// TODO: write timeout
 		err := job.m.Encode(c.conn)
 		if job.r != nil {
@@ -484,6 +501,11 @@ func (c *connection) writer() {
 			close(job.r)
 		}
 		if err != nil {
+			// This one is not interesting; it happens when clients
+			// disappear before we send their acks.
+			if err.String() == "use of closed network connection" {
+				return
+			}
 			log.Print("writer: ", err)
 			return
 		}
@@ -534,4 +556,135 @@ func (w wild) valid() bool {
 		}
 	}
 	return true
+}
+
+const clientQueueLength = 100
+
+type ClientConn struct {
+	ClientId string // May be set before the call to Connect
+	Incoming chan *proto.Publish
+	out      chan job
+	conn     net.Conn
+	done     chan struct{} // This channel will be readable once a Disconnect has been successfully sent and the connection is closed.
+	connack  chan *proto.ConnAck
+}
+
+func NewClientConn(c net.Conn) *ClientConn {
+	return &ClientConn{
+		conn:     c,
+		out:      make(chan job, clientQueueLength),
+		Incoming: make(chan *proto.Publish, clientQueueLength),
+		done:     make(chan struct{}),
+		connack:  make(chan *proto.ConnAck),
+	}
+}
+
+func (c *ClientConn) Start() {
+	go c.reader()
+	go c.writer()
+}
+
+func (c *ClientConn) reader() {
+	defer func() {
+		c.conn.Close()
+		// Cause the writer to exit.
+		close(c.out)
+		log.Print("cli reader: done")
+	}()
+
+	for {
+		// TODO: timeout (first message and/or keepalives)
+		m, err := proto.DecodeOneMessage(c.conn, nil)
+		if err != nil {
+			log.Print("cli reader: ", err)
+			return
+		}
+
+		// log.Printf("dump: %T", m)
+
+		switch m := m.(type) {
+		case *proto.Publish:
+			c.Incoming <- m
+		case *proto.ConnAck:
+			c.connack <- m
+		case *proto.Disconnect:
+			return
+		default:
+			log.Printf("cli reader: got msg type %T", m)
+		}
+	}
+}
+
+func (c *ClientConn) writer() {
+	// Close connection on exit in order to cause reader to exit.
+	defer func() {
+		c.conn.Close()
+		// Signal to Disconnect() that the deed has been done.
+		close(c.done)
+		log.Print("cli writer: done")
+	}()
+
+	for job := range c.out {
+		// TODO: write timeout
+		err := job.m.Encode(c.conn)
+		if job.r != nil {
+			close(job.r)
+		}
+
+		if err != nil {
+			log.Print("cli writer: ", err)
+			return
+		}
+
+		if _, ok := job.m.(*proto.Disconnect); ok {
+			return
+		}
+	}
+}
+
+// Send the CONNECT message to the server. If the ClientId is not already
+// set, use a default (a 63-bit decimal random number). The "clean session"
+// bit is always set.
+func (c *ClientConn) Connect() error {
+	// TODO: Keepalive timer
+	if c.ClientId == "" {
+		c.ClientId = fmt.Sprint(rand.Int63())
+	}
+	c.sync(&proto.Connect{
+		ProtocolName:    "MQIsdp",
+		ProtocolVersion: 3,
+		ClientId:        c.ClientId,
+		CleanSession:    true,
+	})
+	ack := <-c.connack
+	return errs[ack.ReturnCode]
+}
+
+var errs = []error{
+	nil,
+	errors.New("Connection Refused: unacceptable protocol version"),
+	errors.New("Connection Refused: identifier rejected"),
+	errors.New("Connection Refused: server unavailable"),
+	errors.New("Connection Refused: bad user name or password"),
+	errors.New("Connection Refused: not authorized"),
+}
+
+// Sent a DISCONNECT message to the server. This function blocks until the
+// disconnect message is actually sent, and the connection is closed.
+func (c *ClientConn) Disconnect() {
+	c.sync(&proto.Disconnect{})
+	<-c.done
+}
+
+func (c *ClientConn) Publish(m *proto.Publish) {
+	// TODO: MessageId
+	c.out <- job{m: m}
+}
+
+// sync sends a message and blocks until it was actually sent.
+func (c *ClientConn) sync(m proto.Message) {
+	j := job{m: m, r: make(receipt)}
+	c.out <- j
+	<-j.r
+	return
 }

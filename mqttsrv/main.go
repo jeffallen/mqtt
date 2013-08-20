@@ -13,5 +13,6 @@ func main() {
 		return
 	}
 	svr := mqtt.NewServer(l)
+	svr.Start()
 	<-svr.Done
 }
