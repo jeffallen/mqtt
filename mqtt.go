@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	proto "github.com/huin/mqtt"
+	proto "github.com/jeffallen/mqtt"
 )
 
 type subscriptions struct {
@@ -386,13 +386,15 @@ func (c *IncomingConn) reader() {
 	defer func() {
 		c.conn.Close()
 		close(c.jobs)
-		log.Print("reader: done")
 	}()
 
 	for {
 		// TODO: timeout (first message and/or keepalives)
 		m, err := proto.DecodeOneMessage(c.conn, nil)
 		if err != nil {
+			if strings.HasSuffix(err.Error(), "use of closed network connection") {
+				return
+			}
 			log.Print("reader: ", err)
 			return
 		}
@@ -490,7 +492,6 @@ func (c *IncomingConn) writer() {
 		c.conn.Close()
 		c.del()
 		c.svr.subs.unsubAll(c)
-		log.Print("writer: done")
 	}()
 
 	for job := range c.jobs {
@@ -589,13 +590,15 @@ func (c *ClientConn) reader() {
 		c.conn.Close()
 		// Cause the writer to exit.
 		close(c.out)
-		log.Print("cli reader: done")
 	}()
 
 	for {
 		// TODO: timeout (first message and/or keepalives)
 		m, err := proto.DecodeOneMessage(c.conn, nil)
 		if err != nil {
+			if strings.HasSuffix(err.Error(), "use of closed network connection") {
+				return
+			}
 			log.Print("cli reader: ", err)
 			return
 		}
@@ -605,6 +608,9 @@ func (c *ClientConn) reader() {
 		switch m := m.(type) {
 		case *proto.Publish:
 			c.Incoming <- m
+		case *proto.PubAck:
+			// ignore these
+			continue
 		case *proto.ConnAck:
 			c.connack <- m
 		case *proto.Disconnect:
@@ -621,7 +627,6 @@ func (c *ClientConn) writer() {
 		c.conn.Close()
 		// Signal to Disconnect() that the deed has been done.
 		close(c.done)
-		log.Print("cli writer: done")
 	}()
 
 	for job := range c.out {

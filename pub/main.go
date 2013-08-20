@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"code.google.com/p/jra-go/mqtt"
-	proto "github.com/huin/mqtt"
+	proto "github.com/jeffallen/mqtt"
 )
 
 func main() {
