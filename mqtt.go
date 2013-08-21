@@ -14,16 +14,24 @@ import (
 	proto "github.com/jeffallen/mqtt"
 )
 
+// A retain holds information necessary to correctly manage retained
+// messages.
+//
+// This needs to hold copies of the proto.Publish, not pointers to
+// it, or else we can send out one with the wrong retain flag.
+type retain struct {
+	m    proto.Publish
+	wild wild
+}
+
 type subscriptions struct {
 	workers int
 	posts   chan (post)
 
 	mu        sync.Mutex // guards access to fields below
-	subs      map[string][]*IncomingConn
+	subs      map[string][]*incomingConn
 	wildcards []wild
-	// This map needs to hold copies of the proto.Publish, not pointers to
-	// it, or else we can send out one with the wrong retain flag.
-	retain map[string]proto.Publish
+	retain    map[string]retain
 }
 
 // The length of the queue that subscription processing
@@ -32,8 +40,8 @@ const postQueue = 100
 
 func newSubscriptions(workers int) *subscriptions {
 	s := &subscriptions{
-		subs:    make(map[string][]*IncomingConn),
-		retain:  make(map[string]proto.Publish),
+		subs:    make(map[string][]*incomingConn),
+		retain:  make(map[string]retain),
 		posts:   make(chan post, postQueue),
 		workers: workers,
 	}
@@ -43,23 +51,24 @@ func newSubscriptions(workers int) *subscriptions {
 	return s
 }
 
-func (s *subscriptions) sendRetain(topic string, c *IncomingConn) {
+func (s *subscriptions) sendRetain(topic string, c *incomingConn) {
 	s.mu.Lock()
 	var tlist []string
 	if isWildcard(topic) {
+
 		// TODO: select matching topics from the retain map
 	} else {
 		tlist = []string{topic}
 	}
 	for _, t := range tlist {
-		if message, ok := s.retain[t]; ok {
-			c.submit(&message)
+		if r, ok := s.retain[t]; ok {
+			c.submit(&r.m)
 		}
 	}
 	s.mu.Unlock()
 }
 
-func (s *subscriptions) add(topic string, c *IncomingConn) {
+func (s *subscriptions) add(topic string, c *incomingConn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if isWildcard(topic) {
@@ -74,10 +83,10 @@ func (s *subscriptions) add(topic string, c *IncomingConn) {
 
 type wild struct {
 	wild []string
-	c    *IncomingConn
+	c    *incomingConn
 }
 
-func newWild(topic string, c *IncomingConn) wild {
+func newWild(topic string, c *incomingConn) wild {
 	return wild{wild: strings.Split(topic, "/"), c: c}
 }
 
@@ -111,7 +120,7 @@ func (w wild) matches(parts []string) bool {
 }
 
 // Find all connections that are subscribed to this topic.
-func (s *subscriptions) subscribers(topic string) []*IncomingConn {
+func (s *subscriptions) subscribers(topic string) []*incomingConn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -130,7 +139,7 @@ func (s *subscriptions) subscribers(topic string) []*IncomingConn {
 }
 
 // Remove all subscriptions that refer to a connection.
-func (s *subscriptions) unsubAll(c *IncomingConn) {
+func (s *subscriptions) unsubAll(c *incomingConn) {
 	s.mu.Lock()
 	for _, v := range s.subs {
 		for i := range v {
@@ -153,7 +162,7 @@ func (s *subscriptions) unsubAll(c *IncomingConn) {
 }
 
 // Remove the subscription to topic for a given connection.
-func (s *subscriptions) unsub(topic string, c *IncomingConn) {
+func (s *subscriptions) unsub(topic string, c *incomingConn) {
 	s.mu.Lock()
 	if subs, ok := s.subs[topic]; ok {
 		nils := 0
@@ -187,12 +196,12 @@ func (s *subscriptions) run(id int) {
 		// as a result of a subscription that already existed when the
 		// original PUBLISH arrived, the Retain flag should not be set,
 		// regardless of the Retain flag of the original PUBLISH.
-		retain := post.m.Header.Retain
+		isRetain := post.m.Header.Retain
 		post.m.Header.Retain = false
 
 		// Handle "retain with payload size zero = delete retain".
 		// Once the delete is done, return instead of continuing.
-		if retain && post.m.Payload.Size() == 0 {
+		if isRetain && post.m.Payload.Size() == 0 {
 			s.mu.Lock()
 			delete(s.retain, post.m.TopicName)
 			s.mu.Unlock()
@@ -209,37 +218,38 @@ func (s *subscriptions) run(id int) {
 			}
 		}
 
-		if retain {
+		if isRetain {
 			s.mu.Lock()
 			// Save a copy of it, and set that copy's Retain to true, so that
 			// when we send it out later we notify new subscribers that this
 			// is an old message.
 			msg := *post.m
 			msg.Header.Retain = true
-			s.retain[post.m.TopicName] = msg
+			s.retain[post.m.TopicName] = retain{m: msg}
 			s.mu.Unlock()
 		}
 	}
 }
 
-func (s *subscriptions) submit(c *IncomingConn, m *proto.Publish) {
+func (s *subscriptions) submit(c *incomingConn, m *proto.Publish) {
 	s.posts <- post{c: c, m: m}
 }
 
 // A post is a unit of work for the subscription processing workers.
 type post struct {
-	c *IncomingConn
+	c *incomingConn
 	m *proto.Publish
 }
 
 // A Server holds all the state associated with an MQTT server.
 type Server struct {
 	l    net.Listener
-	Done chan struct{}
 	subs *subscriptions
+	Done chan struct{}
+	Dump bool // When true, dump the messages in and out.
 }
 
-// NewServer creates a new MQTT server, which accepts connects from
+// NewServer creates a new MQTT server, which accepts connections from
 // the given listener. When the server is stopped (for instance by
 // another goroutine closing the net.Listener), channel Done will become
 // readable.
@@ -261,15 +271,15 @@ func (s *Server) Start() {
 				break
 			}
 
-			cli := s.NewIncomingConn(conn)
-			cli.Start()
+			cli := s.newIncomingConn(conn)
+			cli.start()
 		}
 		close(s.Done)
 	}()
 }
 
 // An IncomingConn represents a connection into a Server.
-type IncomingConn struct {
+type incomingConn struct {
 	svr      *Server
 	conn     net.Conn
 	jobs     chan job
@@ -277,17 +287,17 @@ type IncomingConn struct {
 	Done     chan struct{}
 }
 
-var clients map[string]*IncomingConn = make(map[string]*IncomingConn)
+var clients map[string]*incomingConn = make(map[string]*incomingConn)
 var clientsMu sync.Mutex
 
 const sendingQueueLength = 100
 
-// NewIncomingConn creates a new IncomingConn associated with this
-// server. The connection becomes the property of the IncomingConn
+// newIncomingConn creates a new incomingConn associated with this
+// server. The connection becomes the property of the incomingConn
 // and should not be touched again by the caller until the Done
 // channel becomes readable.
-func (s *Server) NewIncomingConn(conn net.Conn) *IncomingConn {
-	return &IncomingConn{
+func (s *Server) newIncomingConn(conn net.Conn) *incomingConn {
+	return &incomingConn{
 		svr:  s,
 		conn: conn,
 		jobs: make(chan job, sendingQueueLength),
@@ -309,14 +319,14 @@ type job struct {
 }
 
 // Start reading and writing on this connection.
-func (c *IncomingConn) Start() {
+func (c *incomingConn) start() {
 	go c.reader()
 	go c.writer()
 }
 
 // Add this	connection to the map, or find out that an existing connection
 // already exists for the same client-id.
-func (c *IncomingConn) add() *IncomingConn {
+func (c *incomingConn) add() *incomingConn {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 
@@ -331,7 +341,7 @@ func (c *IncomingConn) add() *IncomingConn {
 }
 
 // Delete a connection; the conection must be closed by the caller first.
-func (c *IncomingConn) del() {
+func (c *incomingConn) del() {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	delete(clients, c.clientid)
@@ -340,7 +350,7 @@ func (c *IncomingConn) del() {
 
 // Replace any existing connection with this one. The one to be replaced,
 // if any, must be closed first by the caller.
-func (c *IncomingConn) replace() {
+func (c *incomingConn) replace() {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 
@@ -369,7 +379,7 @@ func (c *IncomingConn) replace() {
 }
 
 // Queue a message; no notification of sending is done.
-func (c *IncomingConn) submit(m proto.Message) {
+func (c *incomingConn) submit(m proto.Message) {
 	j := job{m: m}
 	c.jobs <- j
 	return
@@ -377,13 +387,13 @@ func (c *IncomingConn) submit(m proto.Message) {
 
 // Queue a message, returns a channel that will be readable
 // when the message is sent.
-func (c *IncomingConn) submitSync(m proto.Message) receipt {
+func (c *incomingConn) submitSync(m proto.Message) receipt {
 	j := job{m: m, r: make(receipt)}
 	c.jobs <- j
 	return j.r
 }
 
-func (c *IncomingConn) reader() {
+func (c *incomingConn) reader() {
 	// On exit, close the connection and arrange for the writer to exit
 	// by closing the output channel.
 	defer func() {
@@ -402,7 +412,9 @@ func (c *IncomingConn) reader() {
 			return
 		}
 
-		//log.Printf("dump  in: %T", m)
+		if c.svr.Dump {
+			log.Printf("dump  in: %T", m)
+		}
 
 		switch m := m.(type) {
 		case *proto.Connect:
@@ -503,7 +515,7 @@ func (c *IncomingConn) reader() {
 	}
 }
 
-func (c *IncomingConn) writer() {
+func (c *incomingConn) writer() {
 
 	// Close connection on exit in order to cause reader to exit.
 	defer func() {
@@ -513,7 +525,9 @@ func (c *IncomingConn) writer() {
 	}()
 
 	for job := range c.jobs {
-		//log.Printf("dump out: %T", job.m)
+		if c.svr.Dump {
+			log.Printf("dump out: %T", job.m)
+		}
 
 		// TODO: write timeout
 		err := job.m.Encode(c.conn)
@@ -581,8 +595,11 @@ func (w wild) valid() bool {
 
 const clientQueueLength = 100
 
+// A ClientConn holds all the state associated with a connection
+// to an MQTT server. It should be allocated via NewClientConn.
 type ClientConn struct {
-	ClientId string // May be set before the call to Connect
+	ClientId string // May be set before the call to Connect.
+	Dump     bool   // When true, dump the messages in and out.
 	Incoming chan *proto.Publish
 	out      chan job
 	conn     net.Conn
@@ -591,8 +608,9 @@ type ClientConn struct {
 	suback   chan *proto.SubAck
 }
 
+// NewClientConn allocates a new ClientConn.
 func NewClientConn(c net.Conn) *ClientConn {
-	return &ClientConn{
+	cc := &ClientConn{
 		conn:     c,
 		out:      make(chan job, clientQueueLength),
 		Incoming: make(chan *proto.Publish, clientQueueLength),
@@ -600,11 +618,9 @@ func NewClientConn(c net.Conn) *ClientConn {
 		connack:  make(chan *proto.ConnAck),
 		suback:   make(chan *proto.SubAck),
 	}
-}
-
-func (c *ClientConn) Start() {
-	go c.reader()
-	go c.writer()
+	go cc.reader()
+	go cc.writer()
+	return cc
 }
 
 func (c *ClientConn) reader() {
@@ -630,7 +646,9 @@ func (c *ClientConn) reader() {
 			return
 		}
 
-		//log.Printf("dump  in: %T", m)
+		if c.Dump {
+			log.Printf("dump  in: %T", m)
+		}
 
 		switch m := m.(type) {
 		case *proto.Publish:
@@ -659,7 +677,9 @@ func (c *ClientConn) writer() {
 	}()
 
 	for job := range c.out {
-		//log.Printf("dump out: %T", job.m)
+		if c.Dump {
+			log.Printf("dump out: %T", job.m)
+		}
 
 		// TODO: write timeout
 		err := job.m.Encode(c.conn)
@@ -714,6 +734,8 @@ func (c *ClientConn) Disconnect() {
 	<-c.done
 }
 
+// Subscribe subscribes this connection to a list of topics. Messages
+// will be delivered on the Incoming channel.
 func (c *ClientConn) Subscribe(tqs []proto.TopicQos) *proto.SubAck {
 	c.sync(&proto.Subscribe{
 		Header:    header(dupFalse, proto.QosAtLeastOnce, retainFalse),
@@ -724,8 +746,12 @@ func (c *ClientConn) Subscribe(tqs []proto.TopicQos) *proto.SubAck {
 	return ack
 }
 
+// Publish publishes the given message to the MQTT server.
+// The QosLevel of the message must be QosAtLeastOnce for now.
 func (c *ClientConn) Publish(m *proto.Publish) {
-	// TODO: MessageId
+	if m.QosLevel != proto.QosAtLeastOnce {
+		panic("unsupported QoS level")
+	}
 	c.out <- job{m: m}
 }
 

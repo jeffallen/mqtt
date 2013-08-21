@@ -14,6 +14,7 @@ import (
 var conns = flag.Int("conns", 100, "how many connections")
 var messages = flag.Int("messages", 100, "how many messages")
 var host = flag.String("host", "localhost:1883", "hostname of broker")
+var dump = flag.Bool("dump", false, "dump messages?")
 
 func main() {
 	flag.Parse()
@@ -49,9 +50,14 @@ loop:
 func pub(i int) {
 	topic := fmt.Sprintf("loadtest/%v", i)
 
-	cc := connect()
+	var cc *mqtt.ClientConn
+	if cc = connect(); cc == nil {
+		return
+	}
+
 	for i := 0; i < *messages; i++ {
 		cc.Publish(&proto.Publish{
+			Header:    proto.Header{QosLevel: proto.QosAtLeastOnce},
 			TopicName: topic,
 			Payload:   proto.BytesPayload([]byte("loadtest payload")),
 		})
@@ -67,8 +73,13 @@ func connect() *mqtt.ClientConn {
 		os.Exit(2)
 	}
 	cc := mqtt.NewClientConn(conn)
-	cc.Start()
-	cc.Connect()
+	cc.Dump = *dump
+
+	err = cc.Connect()
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
 	return cc
 }
 
@@ -78,13 +89,20 @@ var bad = make(chan int)
 func sub(i int, wg *sync.WaitGroup) {
 	topic := fmt.Sprintf("loadtest/%v", i)
 
-	ok := false
-	cc := connect()
-	cc.Subscribe([]proto.TopicQos{
+	var cc *mqtt.ClientConn
+	if cc = connect(); cc == nil {
+		return
+	}
+
+	ack := cc.Subscribe([]proto.TopicQos{
 		{topic, proto.QosAtLeastOnce},
 	})
+	if *dump {
+		fmt.Printf("suback: %#v\n", ack)
+	}
 
 	go func() {
+		ok := false
 		count := 0
 		for _ = range cc.Incoming {
 			count++

@@ -21,7 +21,6 @@ func main() {
 		return
 	}
 	cc := mqtt.NewClientConn(conn)
-	cc.Start()
 
 	cc.Connect()
 	cc.Publish(&proto.Publish{
