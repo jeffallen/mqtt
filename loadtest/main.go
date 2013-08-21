@@ -15,6 +15,9 @@ var conns = flag.Int("conns", 100, "how many connections")
 var messages = flag.Int("messages", 100, "how many messages")
 var host = flag.String("host", "localhost:1883", "hostname of broker")
 var dump = flag.Bool("dump", false, "dump messages?")
+var id = flag.String("id", "", "client id")
+var user = flag.String("user", "", "username")
+var pass = flag.String("pass", "", "password")
 
 func main() {
 	flag.Parse()
@@ -74,8 +77,9 @@ func connect() *mqtt.ClientConn {
 	}
 	cc := mqtt.NewClientConn(conn)
 	cc.Dump = *dump
+	cc.ClientId = *id
 
-	err = cc.Connect()
+	err = cc.Connect(*user, *pass)
 	if err != nil {
 		fmt.Println(err)
 		return nil

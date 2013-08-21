@@ -22,7 +22,9 @@ func main() {
 	}
 	cc := mqtt.NewClientConn(conn)
 
-	cc.Connect()
+	user := ""
+	pass := ""
+	cc.Connect(user, pass)
 	cc.Publish(&proto.Publish{
 		TopicName: os.Args[1],
 		Payload:   proto.BytesPayload([]byte(os.Args[2])),

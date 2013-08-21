@@ -701,17 +701,25 @@ func (c *ClientConn) writer() {
 // Send the CONNECT message to the server. If the ClientId is not already
 // set, use a default (a 63-bit decimal random number). The "clean session"
 // bit is always set.
-func (c *ClientConn) Connect() error {
+func (c *ClientConn) Connect(user, pass string) error {
 	// TODO: Keepalive timer
 	if c.ClientId == "" {
 		c.ClientId = fmt.Sprint(rand.Int63())
 	}
-	c.sync(&proto.Connect{
+	req := &proto.Connect{
 		ProtocolName:    "MQIsdp",
 		ProtocolVersion: 3,
 		ClientId:        c.ClientId,
 		CleanSession:    true,
-	})
+	}
+	if user != "" {
+		req.UsernameFlag = true
+		req.PasswordFlag = true
+		req.Username = user
+		req.Password = pass
+	}
+
+	c.sync(req)
 	ack := <-c.connack
 	return ConnectionErrors[ack.ReturnCode]
 }
