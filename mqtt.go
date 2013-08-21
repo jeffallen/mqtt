@@ -4,6 +4,7 @@ package mqtt
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -200,6 +201,8 @@ func (s *subscriptions) run(id int) {
 
 		// Find all the connections that should be notified of this message.
 		conns := s.subscribers(post.m.TopicName)
+
+		// Queue the outgoing messages
 		for _, c := range conns {
 			if c != nil {
 				c.submit(post.m)
@@ -399,7 +402,7 @@ func (c *IncomingConn) reader() {
 			return
 		}
 
-		// log.Printf("dump: %T", m)
+		//log.Printf("dump  in: %T", m)
 
 		switch m := m.(type) {
 		case *proto.Connect:
@@ -411,10 +414,13 @@ func (c *IncomingConn) reader() {
 				rc = proto.RetCodeUnacceptableProtocolVersion
 			}
 
+			// Check client id.
 			if len(m.ClientId) < 1 || len(m.ClientId) > 23 {
 				rc = proto.RetCodeIdentifierRejected
 			}
 			c.clientid = m.ClientId
+
+			// Disconnect existing connections.
 			if existing := c.add(); existing != nil {
 				disconnect := &proto.Disconnect{}
 				r := existing.submitSync(disconnect)
@@ -432,8 +438,16 @@ func (c *IncomingConn) reader() {
 
 			// close connection if it was a bad connect
 			if rc != proto.RetCodeAccepted {
+				log.Printf("Connection refused for %v: %v", c.conn.RemoteAddr(), ConnectionErrors[rc])
 				return
 			}
+
+			// Log in mosquitto format.
+			clean := 0
+			if m.CleanSession {
+				clean = 1
+			}
+			log.Printf("New client connected from %v as %v (c%v, k%v).", c.conn.RemoteAddr(), c.clientid, clean, m.KeepAliveTimer)
 
 		case *proto.Publish:
 			// TODO: Proper QoS support
@@ -452,6 +466,10 @@ func (c *IncomingConn) reader() {
 			c.submit(&proto.PingResp{})
 
 		case *proto.Subscribe:
+			if m.Header.QosLevel != proto.QosAtLeastOnce {
+				// protocol error, disconnect
+				return
+			}
 			suback := &proto.SubAck{
 				MessageId: m.MessageId,
 				TopicsQos: make([]proto.QosLevel, len(m.Topics)),
@@ -459,7 +477,7 @@ func (c *IncomingConn) reader() {
 			for i, tq := range m.Topics {
 				// TODO: Handle varying QoS correctly
 				c.svr.subs.add(tq.Topic, c)
-				suback.TopicsQos[i] = proto.QosAtLeastOnce
+				suback.TopicsQos[i] = proto.QosAtMostOnce
 			}
 			c.submit(suback)
 
@@ -495,6 +513,8 @@ func (c *IncomingConn) writer() {
 	}()
 
 	for job := range c.jobs {
+		//log.Printf("dump out: %T", job.m)
+
 		// TODO: write timeout
 		err := job.m.Encode(c.conn)
 		if job.r != nil {
@@ -568,6 +588,7 @@ type ClientConn struct {
 	conn     net.Conn
 	done     chan struct{} // This channel will be readable once a Disconnect has been successfully sent and the connection is closed.
 	connack  chan *proto.ConnAck
+	suback   chan *proto.SubAck
 }
 
 func NewClientConn(c net.Conn) *ClientConn {
@@ -577,6 +598,7 @@ func NewClientConn(c net.Conn) *ClientConn {
 		Incoming: make(chan *proto.Publish, clientQueueLength),
 		done:     make(chan struct{}),
 		connack:  make(chan *proto.ConnAck),
+		suback:   make(chan *proto.SubAck),
 	}
 }
 
@@ -587,15 +609,20 @@ func (c *ClientConn) Start() {
 
 func (c *ClientConn) reader() {
 	defer func() {
-		c.conn.Close()
 		// Cause the writer to exit.
 		close(c.out)
+		// Cause any goroutines waiting on messages to arrive to exit.
+		close(c.Incoming)
+		c.conn.Close()
 	}()
 
 	for {
 		// TODO: timeout (first message and/or keepalives)
 		m, err := proto.DecodeOneMessage(c.conn, nil)
 		if err != nil {
+			if err == io.EOF {
+				return
+			}
 			if strings.HasSuffix(err.Error(), "use of closed network connection") {
 				return
 			}
@@ -603,7 +630,7 @@ func (c *ClientConn) reader() {
 			return
 		}
 
-		// log.Printf("dump: %T", m)
+		//log.Printf("dump  in: %T", m)
 
 		switch m := m.(type) {
 		case *proto.Publish:
@@ -613,6 +640,8 @@ func (c *ClientConn) reader() {
 			continue
 		case *proto.ConnAck:
 			c.connack <- m
+		case *proto.SubAck:
+			c.suback <- m
 		case *proto.Disconnect:
 			return
 		default:
@@ -624,12 +653,14 @@ func (c *ClientConn) reader() {
 func (c *ClientConn) writer() {
 	// Close connection on exit in order to cause reader to exit.
 	defer func() {
-		c.conn.Close()
-		// Signal to Disconnect() that the deed has been done.
+		// Signal to Disconnect() that the message is on its way, or
+		// that the connection is closing one way or the other...
 		close(c.done)
 	}()
 
 	for job := range c.out {
+		//log.Printf("dump out: %T", job.m)
+
 		// TODO: write timeout
 		err := job.m.Encode(c.conn)
 		if job.r != nil {
@@ -662,11 +693,13 @@ func (c *ClientConn) Connect() error {
 		CleanSession:    true,
 	})
 	ack := <-c.connack
-	return errs[ack.ReturnCode]
+	return ConnectionErrors[ack.ReturnCode]
 }
 
-var errs = []error{
-	nil,
+// ConnectionErrors is an array of errors corresponding to the
+// Connect return codes specified in the specification.
+var ConnectionErrors = [6]error{
+	nil, // Connection Accepted (not an error)
 	errors.New("Connection Refused: unacceptable protocol version"),
 	errors.New("Connection Refused: identifier rejected"),
 	errors.New("Connection Refused: server unavailable"),
@@ -679,6 +712,16 @@ var errs = []error{
 func (c *ClientConn) Disconnect() {
 	c.sync(&proto.Disconnect{})
 	<-c.done
+}
+
+func (c *ClientConn) Subscribe(tqs []proto.TopicQos) *proto.SubAck {
+	c.sync(&proto.Subscribe{
+		Header:    header(dupFalse, proto.QosAtLeastOnce, retainFalse),
+		MessageId: 0,
+		Topics:    tqs,
+	})
+	ack := <-c.suback
+	return ack
 }
 
 func (c *ClientConn) Publish(m *proto.Publish) {
