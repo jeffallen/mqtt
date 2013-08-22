@@ -757,7 +757,7 @@ func (c *ClientConn) Subscribe(tqs []proto.TopicQos) *proto.SubAck {
 // Publish publishes the given message to the MQTT server.
 // The QosLevel of the message must be QosAtLeastOnce for now.
 func (c *ClientConn) Publish(m *proto.Publish) {
-	if m.QosLevel != proto.QosAtLeastOnce {
+	if m.QosLevel != proto.QosAtMostOnce {
 		panic("unsupported QoS level")
 	}
 	c.out <- job{m: m}

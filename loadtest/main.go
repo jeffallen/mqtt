@@ -60,7 +60,7 @@ func pub(i int) {
 
 	for i := 0; i < *messages; i++ {
 		cc.Publish(&proto.Publish{
-			Header:    proto.Header{QosLevel: proto.QosAtLeastOnce},
+			Header:    proto.Header{QosLevel: proto.QosAtMostOnce},
 			TopicName: topic,
 			Payload:   proto.BytesPayload([]byte("loadtest payload")),
 		})
