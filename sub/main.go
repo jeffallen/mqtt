@@ -14,14 +14,12 @@ var host = flag.String("host", "localhost:1883", "hostname of broker")
 var user = flag.String("user", "", "username")
 var pass = flag.String("pass", "", "password")
 var dump = flag.Bool("dump", false, "dump messages?")
-var retain = flag.Bool("retain", false, "retain message?")
-var wait = flag.Bool("wait", false, "stay connected after publishing?")
 
 func main() {
 	flag.Parse()
 
-	if flag.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: pub topic message")
+	if flag.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: sub topic [topic topic...]")
 		return
 	}
 
@@ -33,21 +31,22 @@ func main() {
 	cc := mqtt.NewClientConn(conn)
 	cc.Dump = *dump
 
+	tq := make([]proto.TopicQos, flag.NArg())
+	for i := 0; i < flag.NArg(); i++ {
+		tq[i].Topic = flag.Arg(i)
+		tq[i].Qos = proto.QosAtMostOnce
+	}
+
 	if err := cc.Connect(*user, *pass); err != nil {
 		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("Connected with client id ", cc.ClientId)
+	cc.Subscribe(tq)
 
-	cc.Publish(&proto.Publish{
-		Header:    proto.Header{Retain: *retain},
-		TopicName: flag.Arg(0),
-		Payload:   proto.BytesPayload([]byte(flag.Arg(1))),
-	})
-
-	if *wait {
-		<-make(chan bool)
+	for m := range cc.Incoming {
+		fmt.Print(m.TopicName, "\t")
+		m.Payload.WritePayload(os.Stdout)
+		fmt.Println("\tr: ", m.Header.Retain)
 	}
-
-	cc.Disconnect()
 }

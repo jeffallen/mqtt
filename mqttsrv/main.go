@@ -8,22 +8,22 @@ import (
 
 type mlRes struct {
 	conn net.Conn
-	err error
+	err  error
 }
 
 type multiListener struct {
 	listeners []net.Listener
-	next chan mlRes
+	next      chan mlRes
 }
 
 func newMultiListener(l ...net.Listener) *multiListener {
 	ml := &multiListener{
 		listeners: make([]net.Listener, len(l)),
-		next: make(chan mlRes, len(l)),
+		next:      make(chan mlRes, len(l)),
 	}
 	copy(ml.listeners, l)
 
-	for _,l := range ml.listeners {
+	for _, l := range ml.listeners {
 		go func(l net.Listener, next chan mlRes) {
 			for {
 				res := mlRes{}
@@ -36,19 +36,19 @@ func newMultiListener(l ...net.Listener) *multiListener {
 	return ml
 }
 
-func (ml *multiListener)Accept() (net.Conn, error) {
+func (ml *multiListener) Accept() (net.Conn, error) {
 	res := <-ml.next
 	return res.conn, res.err
 }
 
-func (ml *multiListener)Close() error {
-	for _,l := range ml.listeners {
+func (ml *multiListener) Close() error {
+	for _, l := range ml.listeners {
 		l.Close()
 	}
 	return nil
 }
 
-func (ml *multiListener)Addr() net.Addr {
+func (ml *multiListener) Addr() net.Addr {
 	return ml.listeners[0].Addr()
 }
 

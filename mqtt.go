@@ -2,17 +2,89 @@
 package mqtt
 
 import (
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	proto "github.com/jeffallen/mqtt"
 )
+
+// A random number generator ready to make client-id's, if
+// they do not provide them to us.
+var cliRand *rand.Rand
+
+func init() {
+	var seed int64
+	var sb [4]byte
+	crand.Read(sb[:])
+	seed = int64(time.Now().Nanosecond())<<32 |
+		int64(sb[0])<<24 | int64(sb[1])<<16 |
+		int64(sb[2])<<8 | int64(sb[3])
+	cliRand = rand.New(rand.NewSource(seed))
+}
+
+type stats struct {
+	recv       int64
+	sent       int64
+	clients    int64
+	clientsMax int64
+}
+
+func (s *stats) messageRecv()      { atomic.AddInt64(&s.recv, 1) }
+func (s *stats) messageSend()      { atomic.AddInt64(&s.sent, 1) }
+func (s *stats) clientConnect()    { atomic.AddInt64(&s.clients, 1) }
+func (s *stats) clientDisconnect() { atomic.AddInt64(&s.clients, -1) }
+
+func statsMessage(topic string, stat int64) *proto.Publish {
+	return &proto.Publish{
+		Header:    header(dupFalse, proto.QosAtMostOnce, retainTrue),
+		TopicName: topic,
+		Payload:   newIntPayload(stat),
+	}
+}
+
+func (s *stats) publish(sub *subscriptions) {
+	clients := atomic.LoadInt64(&s.clients)
+	clientsMax := atomic.LoadInt64(&s.clientsMax)
+	if clients > clientsMax {
+		clientsMax = clients
+		atomic.StoreInt64(&s.clientsMax, clientsMax)
+	}
+	sub.submit(nil, statsMessage("$SYS/broker/clients/active", clients))
+	sub.submit(nil, statsMessage("$SYS/broker/clients/maximum", clients))
+	sub.submit(nil, statsMessage("$SYS/broker/messages/received",
+		atomic.LoadInt64(&s.recv)))
+	sub.submit(nil, statsMessage("$SYS/broker/messages/sent",
+		atomic.LoadInt64(&s.sent)))
+}
+
+// An intPayload implements proto.Payload, and is an int64 that
+// formats itself and then prints itself into the payload.
+type intPayload string
+
+func newIntPayload(i int64) intPayload {
+	return intPayload(fmt.Sprint(i))
+}
+func (ip intPayload) ReadPayload(r io.Reader) error {
+	// not implemented
+	return nil
+}
+func (ip intPayload) WritePayload(w io.Writer) error {
+	_, err := w.Write([]byte(string(ip)))
+	return err
+}
+func (i intPayload) Size() int {
+	return len(i)
+}
 
 // A retain holds information necessary to correctly manage retained
 // messages.
@@ -32,6 +104,7 @@ type subscriptions struct {
 	subs      map[string][]*incomingConn
 	wildcards []wild
 	retain    map[string]retain
+	stats     *stats
 }
 
 // The length of the queue that subscription processing
@@ -190,7 +263,6 @@ func (s *subscriptions) run(id int) {
 	tag := fmt.Sprintf("worker %d ", id)
 	log.Print(tag, "started")
 	for post := range s.posts {
-
 		// Remember the original retain setting, but send out immediate
 		// copies without retain: "When a server sends a PUBLISH to a client
 		// as a result of a subscription that already existed when the
@@ -243,10 +315,13 @@ type post struct {
 
 // A Server holds all the state associated with an MQTT server.
 type Server struct {
-	l    net.Listener
-	subs *subscriptions
-	Done chan struct{}
-	Dump bool // When true, dump the messages in and out.
+	l             net.Listener
+	subs          *subscriptions
+	stats         *stats
+	Done          chan struct{}
+	StatsInterval time.Duration // Defaults to 10 seconds. Must be set using sync/atomic.StoreInt64().
+	Dump          bool          // When true, dump the messages in and out.
+	rand          *rand.Rand
 }
 
 // NewServer creates a new MQTT server, which accepts connections from
@@ -254,11 +329,29 @@ type Server struct {
 // another goroutine closing the net.Listener), channel Done will become
 // readable.
 func NewServer(l net.Listener) *Server {
-	return &Server{
-		l:    l,
-		Done: make(chan struct{}),
-		subs: newSubscriptions(2), // 2 workers for now, to see it working in parallel
+	svr := &Server{
+		l:             l,
+		stats:         &stats{},
+		Done:          make(chan struct{}),
+		StatsInterval: time.Second * 10,
+		subs:          newSubscriptions(runtime.GOMAXPROCS(0)),
 	}
+
+	// start the stats reporting goroutine
+	go func() {
+		for {
+			svr.stats.publish(svr.subs)
+			select {
+			case <-svr.Done:
+				return
+			default:
+				// keep going
+			}
+			time.Sleep(svr.StatsInterval)
+		}
+	}()
+
+	return svr
 }
 
 // Start makes the Server start accepting and handling connections.
@@ -272,6 +365,7 @@ func (s *Server) Start() {
 			}
 
 			cli := s.newIncomingConn(conn)
+			s.stats.clientConnect()
 			cli.start()
 		}
 		close(s.Done)
@@ -381,8 +475,16 @@ func (c *incomingConn) replace() {
 // Queue a message; no notification of sending is done.
 func (c *incomingConn) submit(m proto.Message) {
 	j := job{m: m}
-	c.jobs <- j
+	select {
+	case c.jobs <- j:
+	default:
+		log.Print(c, ": failed to submit message")
+	}
 	return
+}
+
+func (c *incomingConn) String() string {
+	return fmt.Sprintf("{IncomingConn: %v}", c.clientid)
 }
 
 // Queue a message, returns a channel that will be readable
@@ -398,6 +500,7 @@ func (c *incomingConn) reader() {
 	// by closing the output channel.
 	defer func() {
 		c.conn.Close()
+		c.svr.stats.clientDisconnect()
 		close(c.jobs)
 	}()
 
@@ -405,12 +508,16 @@ func (c *incomingConn) reader() {
 		// TODO: timeout (first message and/or keepalives)
 		m, err := proto.DecodeOneMessage(c.conn, nil)
 		if err != nil {
+			if err == io.EOF {
+				return
+			}
 			if strings.HasSuffix(err.Error(), "use of closed network connection") {
 				return
 			}
 			log.Print("reader: ", err)
 			return
 		}
+		c.svr.stats.messageRecv()
 
 		if c.svr.Dump {
 			log.Printf("dump  in: %T", m)
@@ -544,6 +651,7 @@ func (c *incomingConn) writer() {
 			log.Print("writer: ", err)
 			return
 		}
+		c.svr.stats.messageSend()
 
 		if _, ok := job.m.(*proto.Disconnect); ok {
 			log.Print("writer: sent disconnect message")
@@ -704,7 +812,7 @@ func (c *ClientConn) writer() {
 func (c *ClientConn) Connect(user, pass string) error {
 	// TODO: Keepalive timer
 	if c.ClientId == "" {
-		c.ClientId = fmt.Sprint(rand.Int63())
+		c.ClientId = fmt.Sprint(cliRand.Int63())
 	}
 	req := &proto.Connect{
 		ProtocolName:    "MQIsdp",
