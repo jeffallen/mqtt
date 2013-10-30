@@ -3,12 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"code.google.com/p/jra-go/mqtt"
-	proto "github.com/jeffallen/mqtt"
+	proto "github.com/huin/mqtt"
 )
 
 var conns = flag.Int("conns", 100, "how many connections")
@@ -22,8 +24,12 @@ var pass = flag.String("pass", "", "password")
 func main() {
 	flag.Parse()
 
+	publishers := *conns / 2
+
+	timeStart := time.Now()
+
 	var wg sync.WaitGroup
-	for i := 0; i < *conns; i++ {
+	for i := 0; i < publishers; i++ {
 		wg.Add(2)
 		go func(i int) {
 			sub(i, &wg)
@@ -34,6 +40,8 @@ func main() {
 	println("all started")
 	wg.Wait()
 	println("all finished")
+
+	timeEnd := time.Now()
 
 	rc := 0
 loop:
@@ -47,6 +55,16 @@ loop:
 			break loop
 		}
 	}
+
+	elapsed := timeEnd.Sub(timeStart)
+	totmsg := float64(*messages * publishers)
+	nspermsg := float64(elapsed) / totmsg
+	msgpersec := int(1 / nspermsg * 1e9)
+
+	log.Print("elapsed time: ", elapsed)
+	log.Print("messages    : ", totmsg)
+	log.Print("messages/sec: ", msgpersec)
+
 	os.Exit(rc)
 }
 
@@ -110,7 +128,6 @@ func sub(i int, wg *sync.WaitGroup) {
 		count := 0
 		for _ = range cc.Incoming {
 			count++
-			println("count", count)
 			if count == *messages {
 				cc.Disconnect()
 				ok = true

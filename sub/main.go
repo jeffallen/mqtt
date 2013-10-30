@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"code.google.com/p/jra-go/mqtt"
-	proto "github.com/jeffallen/mqtt"
+	proto "github.com/huin/mqtt"
 )
 
 var host = flag.String("host", "localhost:1883", "hostname of broker")

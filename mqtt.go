@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	proto "github.com/jeffallen/mqtt"
+	proto "github.com/huin/mqtt"
 )
 
 // A random number generator ready to make client-id's, if
@@ -60,7 +60,7 @@ func (s *stats) publish(sub *subscriptions) {
 		atomic.StoreInt64(&s.clientsMax, clientsMax)
 	}
 	sub.submit(nil, statsMessage("$SYS/broker/clients/active", clients))
-	sub.submit(nil, statsMessage("$SYS/broker/clients/maximum", clients))
+	sub.submit(nil, statsMessage("$SYS/broker/clients/maximum", clientsMax))
 	sub.submit(nil, statsMessage("$SYS/broker/messages/received",
 		atomic.LoadInt64(&s.recv)))
 	sub.submit(nil, statsMessage("$SYS/broker/messages/sent",
@@ -360,7 +360,7 @@ func (s *Server) Start() {
 		for {
 			conn, err := s.l.Accept()
 			if err != nil {
-				log.Print("Accept", err)
+				log.Print("Accept: ", err)
 				break
 			}
 
