@@ -21,14 +21,23 @@ var id = flag.String("id", "", "client id")
 var user = flag.String("user", "", "username")
 var pass = flag.String("pass", "", "password")
 
-func main() {
-	flag.Parse()
+var cwg sync.WaitGroup
 
-	publishers := *conns / 2
+func main() {
+	log.SetFlags(log.Lmicroseconds)
+	flag.Parse()
 
 	timeStart := time.Now()
 
+	// a system to check how long connection establishment takes
+	cwg.Add(*conns)
+	go func() {
+		cwg.Wait()
+		log.Print("all connections made")
+	}()
+
 	var wg sync.WaitGroup
+	publishers := *conns / 2
 	for i := 0; i < publishers; i++ {
 		wg.Add(2)
 		go func(i int) {
@@ -37,9 +46,9 @@ func main() {
 			wg.Done()
 		}(i)
 	}
-	println("all started")
+	log.Print("all started")
 	wg.Wait()
-	println("all finished")
+	log.Print("all finished")
 
 	timeEnd := time.Now()
 
@@ -102,6 +111,8 @@ func connect() *mqtt.ClientConn {
 		fmt.Println(err)
 		return nil
 	}
+
+	cwg.Done()
 	return cc
 }
 
