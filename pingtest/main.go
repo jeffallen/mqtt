@@ -15,12 +15,12 @@ import (
 	proto "github.com/huin/mqtt"
 )
 
-var conns = flag.Int("conns", 100, "how many connections")
+var pairs = flag.Int("pairs", 100, "how many ping/reply pairs")
 var wsubs = flag.Int("wsubs", 20, "how many wildcard subscribers")
 var messages = flag.Int("messages", 1000, "how many messages")
 var host = flag.String("host", "localhost:1883", "hostname of broker")
 var dump = flag.Bool("dump", false, "dump messages?")
-var id = flag.String("id", "", "client id")
+var id = flag.String("id", "", "client id (default: use a random one)")
 var user = flag.String("user", "", "username")
 var pass = flag.String("pass", "", "password")
 
@@ -59,21 +59,21 @@ func main() {
 	timeStart := time.Now()
 
 	// a system to check how long connection establishment takes
-	cwg.Add(*conns + *wsubs)
+	cwg.Add(2 * *pairs + *wsubs)
 	go func() {
 		cwg.Wait()
 		log.Print("all connections made")
 	}()
 
 	// start the wildcard subscribers
-	wsubWg.Add(*wsubs)
+	wsubExit.Add(*wsubs)
+	wsubReady.Add(*wsubs)
 	for i := 0; i < *wsubs; i++ {
 		go wsub()
 	}
 
 	var wg sync.WaitGroup
-	publishers := *conns / 2
-	for i := 0; i < publishers; i++ {
+	for i := 0; i < *pairs; i++ {
 		wg.Add(1)
 		go func(i int) {
 			ping(i)
@@ -87,11 +87,11 @@ func main() {
 	timeEnd := time.Now()
 
 	log.Print("checking wildcard subscribers:")
-	wsubWg.Wait()
+	wsubExit.Wait()
 	log.Print("ok")
 
 	elapsed := timeEnd.Sub(timeStart)
-	totmsg := float64(*messages * 2 * publishers)
+	totmsg := float64(*messages * 2 * *pairs)
 	msgpersec := totmsg / float64(elapsed/time.Second)
 
 	log.Print("elapsed time: ", elapsed)
@@ -107,6 +107,8 @@ func main() {
 }
 
 func ping(i int) {
+	wsubReady.Wait()
+
 	topic := fmt.Sprintf("pingtest/%v/request", i)
 	topic2 := fmt.Sprintf("pingtest/%v/reply", i)
 
@@ -208,10 +210,11 @@ func connect() *mqtt.ClientConn {
 	return cc
 }
 
-var wsubWg sync.WaitGroup
+var wsubExit sync.WaitGroup
+var wsubReady sync.WaitGroup
 
 func wsub() {
-	topic := "pingtest/1/#"
+	topic := "pingtest/0/#"
 
 	cc := connect()
 	defer cc.Disconnect()
@@ -223,11 +226,13 @@ func wsub() {
 		fmt.Printf("suback: %#v\n", ack)
 	}
 
+	wsubReady.Done()
+
 	count := 0
 	for _ = range cc.Incoming {
 		count++
 		if count == (2 * *messages) {
-			wsubWg.Done()
+			wsubExit.Done()
 			return
 		}
 	}
