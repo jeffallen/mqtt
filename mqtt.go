@@ -1,4 +1,4 @@
-// Package mqtt implements MQTT clients and servers
+// Package mqtt implements MQTT clients and servers.
 package mqtt
 
 import (
@@ -706,9 +706,9 @@ const clientQueueLength = 100
 // A ClientConn holds all the state associated with a connection
 // to an MQTT server. It should be allocated via NewClientConn.
 type ClientConn struct {
-	ClientId string // May be set before the call to Connect.
-	Dump     bool   // When true, dump the messages in and out.
-	Incoming chan *proto.Publish
+	ClientId string              // May be set before the call to Connect.
+	Dump     bool                // When true, dump the messages in and out.
+	Incoming chan *proto.Publish // Incoming messages arrive on this channel.
 	out      chan job
 	conn     net.Conn
 	done     chan struct{} // This channel will be readable once a Disconnect has been successfully sent and the connection is closed.
