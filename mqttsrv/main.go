@@ -4,6 +4,8 @@ import (
 	"code.google.com/p/jra-go/mqtt"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 )
 
 type mlRes struct {
@@ -53,6 +55,11 @@ func (ml *multiListener) Addr() net.Addr {
 }
 
 func main() {
+	// see godoc net/http/pprof
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	l, err := net.Listen("tcp", ":1883")
 	if err != nil {
 		log.Print("listen: ", err)
