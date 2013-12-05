@@ -1,0 +1,29 @@
+mqtt
+====
+
+MQTT Clients and Servers in Go
+
+For docs, see: http://godoc.org/github.com/jeffallen/mqtt
+
+For a little discussion of this code see: http://blog.nella.org/mqtt-code-golf
+
+
+To use the library in your own app, just use the normal "go get github.com/jeffallen/mqtt" to fetch and build it, and then import the package.
+
+Servers
+-------
+
+The example MQTT servers are in directories <tt>mqttsrv</tt> and <tt>smqttsrv</tt> (secured with TLS).
+
+Benchmarking Tools
+------------------
+
+To use the benchmarking tools, cd into <tt>pingtest</tt>, <tt>loadtest</tt>, or <tt>many</tt> and type "go build". Both tools have reasonable defaults. Use the -help flag to find out what can be tuned.
+
+All benchmarks suck, and these three suck in two different ways.
+
+pingtest simulates a number of pairs of clients who are bouncing messages between them as fast as possible. It aims to measure latency of messages through the system when under load.
+
+loadtest simulates a number of pairs of clients where one is sending as fast as possible to the other. Realistically, this ends up testing the ability of the system to decode and queue messages, because any slight inbalance in scheduling of readers causes a pile up of messages from the writer slamming them down the throat of the server.
+
+many simulates a large number of clients who send a low transacation rate. The goal is to eventually use this to achieve 1 million (and more?) concurrent, active MQTT sessions in one server. So far, <tt>mqttsrv</tt> has survived a load of 40k concurrent connections from <tt>many</tt>.
