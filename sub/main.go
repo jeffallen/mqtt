@@ -11,6 +11,7 @@ import (
 )
 
 var host = flag.String("host", "localhost:1883", "hostname of broker")
+var id = flag.String("id", "", "client id")
 var user = flag.String("user", "", "username")
 var pass = flag.String("pass", "", "password")
 var dump = flag.Bool("dump", false, "dump messages?")
@@ -30,6 +31,7 @@ func main() {
 	}
 	cc := mqtt.NewClientConn(conn)
 	cc.Dump = *dump
+	cc.ClientId = *id
 
 	tq := make([]proto.TopicQos, flag.NArg())
 	for i := 0; i < flag.NArg(); i++ {
