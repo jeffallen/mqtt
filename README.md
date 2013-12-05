@@ -1,14 +1,20 @@
 mqtt
 ====
 
-MQTT Clients and Servers in Go
+MQTT Clients, Servers and Load Testers in Go
 
 For docs, see: http://godoc.org/github.com/jeffallen/mqtt
 
 For a little discussion of this code see: http://blog.nella.org/mqtt-code-golf
 
+Limitations
+-----------
 
-To use the library in your own app, just use the normal "go get github.com/jeffallen/mqtt" to fetch and build it, and then import the package.
+At this time, the following limitations apply:
+ * QoS level 0 only; messages are only stored in RAM
+ * Retain works, but at QoS level 0. Retained messages are lost on server restart.
+ * Last will messages are not implemented.
+ * Keepalive and timeouts are not implemented.
 
 Servers
 -------
