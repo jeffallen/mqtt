@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/jeffallen/mqtt"
 	"crypto/tls"
+	"github.com/jeffallen/mqtt"
 	"log"
 )
 

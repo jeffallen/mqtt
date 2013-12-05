@@ -6,8 +6,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/jeffallen/mqtt"
 	proto "github.com/huin/mqtt"
+	"github.com/jeffallen/mqtt"
 )
 
 var host = flag.String("host", "localhost:1883", "hostname of broker")

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jeffallen/mqtt"
 	"github.com/eclesh/welford"
 	proto "github.com/huin/mqtt"
+	"github.com/jeffallen/mqtt"
 )
 
 var pairs = flag.Int("pairs", 100, "how many ping/reply pairs")
@@ -59,7 +59,7 @@ func main() {
 	timeStart := time.Now()
 
 	// a system to check how long connection establishment takes
-	cwg.Add(2 * *pairs + *wsubs)
+	cwg.Add(2**pairs + *wsubs)
 	go func() {
 		cwg.Wait()
 		log.Print("all connections made")
