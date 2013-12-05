@@ -18,9 +18,9 @@ The example MQTT servers are in directories <tt>mqttsrv</tt> and <tt>smqttsrv</t
 Benchmarking Tools
 ------------------
 
-To use the benchmarking tools, cd into <tt>pingtest</tt>, <tt>loadtest</tt>, or <tt>many</tt> and type "go build". Both tools have reasonable defaults. Use the -help flag to find out what can be tuned.
+To use the benchmarking tools, cd into <tt>pingtest</tt>, <tt>loadtest</tt>, or <tt>many</tt> and type "go build". The tools have reasonable defaults, but you'll also want to use the -help flag to find out what can be tuned.
 
-All benchmarks suck, and these three suck in two different ways.
+All benchmarks suck, and these three suck in different ways.
 
 pingtest simulates a number of pairs of clients who are bouncing messages between them as fast as possible. It aims to measure latency of messages through the system when under load.
 
