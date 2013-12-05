@@ -1,7 +1,7 @@
 package main
 
 import (
-	"code.google.com/p/jra-go/mqtt"
+	"github.com/jeffallen/mqtt"
 	"log"
 	"net"
 	"net/http"

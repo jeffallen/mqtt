@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"code.google.com/p/jra-go/mqtt"
+	"github.com/jeffallen/mqtt"
 	"github.com/eclesh/welford"
 	proto "github.com/huin/mqtt"
 )
