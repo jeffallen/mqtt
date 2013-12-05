@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -59,14 +58,13 @@ func client(i int) {
 	log.Print("starting client ", i)
 	conn, err := net.Dial("tcp", *host)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dial: ", err)
-		os.Exit(1)
+		log.Fatal("dial: ", err)
 	}
 	cc := mqtt.NewClientConn(conn)
 	cc.Dump = *dump
 
 	if err := cc.Connect(*user, *pass); err != nil {
-		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
+		log.Fatal("connect: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -79,6 +77,6 @@ func client(i int) {
 			Payload:   payload,
 		})
 		sltime := rand.Int31n(half) - (half / 2) + int32(*pace)
-		time.Sleep(time.Duration(sltime))
+		time.Sleep(time.Duration(sltime) * time.Second)
 	}
 }

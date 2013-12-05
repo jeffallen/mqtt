@@ -37,6 +37,7 @@ type stats struct {
 	sent       int64
 	clients    int64
 	clientsMax int64
+	lastmsgs   int64
 }
 
 func (s *stats) messageRecv()      { atomic.AddInt64(&s.recv, 1) }
@@ -52,7 +53,7 @@ func statsMessage(topic string, stat int64) *proto.Publish {
 	}
 }
 
-func (s *stats) publish(sub *subscriptions) {
+func (s *stats) publish(sub *subscriptions, interval time.Duration) {
 	clients := atomic.LoadInt64(&s.clients)
 	clientsMax := atomic.LoadInt64(&s.clientsMax)
 	if clients > clientsMax {
@@ -65,6 +66,13 @@ func (s *stats) publish(sub *subscriptions) {
 		atomic.LoadInt64(&s.recv)))
 	sub.submit(nil, statsMessage("$SYS/broker/messages/sent",
 		atomic.LoadInt64(&s.sent)))
+
+	msgs := atomic.LoadInt64(&s.recv) + atomic.LoadInt64(&s.recv)
+	msgpersec := (msgs-s.lastmsgs) / int64(interval/time.Second)
+	// no need for atomic because we are the only reader/writer of it
+	s.lastmsgs = msgs
+
+	sub.submit(nil, statsMessage("$SYS/broker/messages/per-sec", msgpersec))
 }
 
 // An intPayload implements proto.Payload, and is an int64 that
@@ -340,7 +348,7 @@ func NewServer(l net.Listener) *Server {
 	// start the stats reporting goroutine
 	go func() {
 		for {
-			svr.stats.publish(svr.subs)
+			svr.stats.publish(svr.subs, svr.StatsInterval)
 			select {
 			case <-svr.Done:
 				return
@@ -520,7 +528,7 @@ func (c *incomingConn) reader() {
 		c.svr.stats.messageRecv()
 
 		if c.svr.Dump {
-			log.Printf("dump  in: %T %v", m, m)
+			log.Printf("dump  in: %T", m)
 		}
 
 		switch m := m.(type) {
@@ -633,7 +641,7 @@ func (c *incomingConn) writer() {
 
 	for job := range c.jobs {
 		if c.svr.Dump {
-			log.Printf("dump out: %T %v", job.m, job.m)
+			log.Printf("dump out: %T", job.m)
 		}
 
 		// TODO: write timeout
@@ -755,7 +763,7 @@ func (c *ClientConn) reader() {
 		}
 
 		if c.Dump {
-			log.Printf("dump  in: %T %v", m, m)
+			log.Printf("dump  in: %T", m)
 		}
 
 		switch m := m.(type) {
@@ -786,7 +794,7 @@ func (c *ClientConn) writer() {
 
 	for job := range c.out {
 		if c.Dump {
-			log.Printf("dump out: %T %v", job.m, job.m)
+			log.Printf("dump out: %T", job.m)
 		}
 
 		// TODO: write timeout
