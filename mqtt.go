@@ -67,7 +67,7 @@ func (s *stats) publish(sub *subscriptions, interval time.Duration) {
 	sub.submit(nil, statsMessage("$SYS/broker/messages/sent",
 		atomic.LoadInt64(&s.sent)))
 
-	msgs := atomic.LoadInt64(&s.recv) + atomic.LoadInt64(&s.recv)
+	msgs := atomic.LoadInt64(&s.recv) + atomic.LoadInt64(&s.sent)
 	msgpersec := (msgs - s.lastmsgs) / int64(interval/time.Second)
 	// no need for atomic because we are the only reader/writer of it
 	s.lastmsgs = msgs
