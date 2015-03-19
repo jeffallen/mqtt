@@ -137,7 +137,7 @@ func sub(i int, wg *sync.WaitGroup) {
 	go func() {
 		ok := false
 		count := 0
-		for _ = range cc.Incoming {
+		for range cc.Incoming {
 			count++
 			if count == *messages {
 				cc.Disconnect()

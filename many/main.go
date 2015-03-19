@@ -64,7 +64,7 @@ func client(i int) {
 	cc.Dump = *dump
 
 	if err := cc.Connect(*user, *pass); err != nil {
-		log.Fatal("connect: %v\n", err)
+		log.Fatalf("connect: %v\n", err)
 		os.Exit(1)
 	}
 

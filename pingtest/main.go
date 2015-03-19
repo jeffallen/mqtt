@@ -229,7 +229,7 @@ func wsub() {
 	wsubReady.Done()
 
 	count := 0
-	for _ = range cc.Incoming {
+	for range cc.Incoming {
 		count++
 		if count == (2 * *messages) {
 			wsubExit.Done()

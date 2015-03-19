@@ -90,8 +90,8 @@ func (ip intPayload) WritePayload(w io.Writer) error {
 	_, err := w.Write([]byte(string(ip)))
 	return err
 }
-func (i intPayload) Size() int {
-	return len(i)
+func (ip intPayload) Size() int {
+	return len(ip)
 }
 
 // A retain holds information necessary to correctly manage retained
@@ -389,7 +389,7 @@ type incomingConn struct {
 	Done     chan struct{}
 }
 
-var clients map[string]*incomingConn = make(map[string]*incomingConn)
+var clients = make(map[string]*incomingConn)
 var clientsMu sync.Mutex
 
 const sendingQueueLength = 100
@@ -814,7 +814,7 @@ func (c *ClientConn) writer() {
 	}
 }
 
-// Send the CONNECT message to the server. If the ClientId is not already
+// Connect sends the CONNECT message to the server. If the ClientId is not already
 // set, use a default (a 63-bit decimal random number). The "clean session"
 // bit is always set.
 func (c *ClientConn) Connect(user, pass string) error {
@@ -851,8 +851,9 @@ var ConnectionErrors = [6]error{
 	errors.New("Connection Refused: not authorized"),
 }
 
-// Sent a DISCONNECT message to the server. This function blocks until the
-// disconnect message is actually sent, and the connection is closed.
+// Disconnect sends a DISCONNECT message to the server. This function
+// blocks until the disconnect message is actually sent, and the connection
+// is closed.
 func (c *ClientConn) Disconnect() {
 	c.sync(&proto.Disconnect{})
 	<-c.done
