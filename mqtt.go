@@ -653,9 +653,15 @@ func (c *incomingConn) writer() {
 		if err != nil {
 			// This one is not interesting; it happens when clients
 			// disappear before we send their acks.
+			oe, isoe := err.(*net.OpError)
+			if isoe && oe.Err.Error() == "use of closed network connection" {
+				return
+			}
+			// In Go < 1.5, the error is not an OpError.
 			if err.Error() == "use of closed network connection" {
 				return
 			}
+
 			log.Print("writer: ", err)
 			return
 		}

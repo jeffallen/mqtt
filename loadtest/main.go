@@ -17,7 +17,6 @@ var conns = flag.Int("conns", 100, "how many connections")
 var messages = flag.Int("messages", 100, "how many messages")
 var host = flag.String("host", "localhost:1883", "hostname of broker")
 var dump = flag.Bool("dump", false, "dump messages?")
-var id = flag.String("id", "", "client id")
 var user = flag.String("user", "", "username")
 var pass = flag.String("pass", "", "password")
 
@@ -26,6 +25,10 @@ var cwg sync.WaitGroup
 func main() {
 	log.SetFlags(log.Lmicroseconds)
 	flag.Parse()
+
+	if *conns&1 != 0 {
+		log.Fatal("Number of connections should be even.")
+	}
 
 	timeStart := time.Now()
 
@@ -81,7 +84,7 @@ func pub(i int) {
 	topic := fmt.Sprintf("loadtest/%v", i)
 
 	var cc *mqtt.ClientConn
-	if cc = connect(); cc == nil {
+	if cc = connect(fmt.Sprintf("pub%v", i)); cc == nil {
 		return
 	}
 
@@ -96,7 +99,7 @@ func pub(i int) {
 	cc.Disconnect()
 }
 
-func connect() *mqtt.ClientConn {
+func connect(who string) *mqtt.ClientConn {
 	conn, err := net.Dial("tcp", *host)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dial: %v\n", err)
@@ -104,7 +107,7 @@ func connect() *mqtt.ClientConn {
 	}
 	cc := mqtt.NewClientConn(conn)
 	cc.Dump = *dump
-	cc.ClientId = *id
+	cc.ClientId = who
 
 	err = cc.Connect(*user, *pass)
 	if err != nil {
@@ -123,7 +126,7 @@ func sub(i int, wg *sync.WaitGroup) {
 	topic := fmt.Sprintf("loadtest/%v", i)
 
 	var cc *mqtt.ClientConn
-	if cc = connect(); cc == nil {
+	if cc = connect(fmt.Sprintf("sub%v", i)); cc == nil {
 		return
 	}
 
