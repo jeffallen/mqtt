@@ -392,7 +392,7 @@ type incomingConn struct {
 var clients = make(map[string]*incomingConn)
 var clientsMu sync.Mutex
 
-const sendingQueueLength = 100
+const sendingQueueLength = 10000
 
 // newIncomingConn creates a new incomingConn associated with this
 // server. The connection becomes the property of the incomingConn
