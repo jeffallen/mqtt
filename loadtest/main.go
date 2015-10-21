@@ -99,7 +99,22 @@ func pub(i int) {
 	cc.Disconnect()
 }
 
+// A mechanism to limit parallelism during connects.
+const numTokens = 100
+
+var tokens = make(chan struct{}, numTokens)
+
+func init() {
+	var tok struct{}
+	for i := 0; i < numTokens; i++ {
+		tokens <- tok
+	}
+}
+
 func connect(who string) *mqtt.ClientConn {
+	tok := <-tokens
+	defer func() { tokens <- tok }()
+
 	conn, err := net.Dial("tcp", *host)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dial: %v\n", err)
