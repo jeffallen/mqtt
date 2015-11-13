@@ -92,7 +92,7 @@ func main() {
 
 	elapsed := timeEnd.Sub(timeStart)
 	totmsg := float64(*messages * 2 * *pairs)
-	msgpersec := totmsg / float64(elapsed/time.Second)
+	msgpersec := totmsg / (float64(elapsed)/float64(time.Second))
 
 	log.Print("elapsed time: ", elapsed)
 	log.Print("messages    : ", totmsg)
