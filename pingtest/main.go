@@ -57,12 +57,14 @@ func main() {
 	flag.Parse()
 
 	timeStart := time.Now()
+	timeConnStart := time.Now()
 
 	// a system to check how long connection establishment takes
 	cwg.Add(2**pairs + *wsubs)
 	go func() {
 		cwg.Wait()
 		log.Print("all connections made")
+		log.Print("Time to establish connections: ", time.Now().Sub(timeConnStart))
 	}()
 
 	// start the wildcard subscribers

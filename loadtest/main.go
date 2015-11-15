@@ -31,12 +31,15 @@ func main() {
 	}
 
 	timeStart := time.Now()
+	timeConnStart := time.Now()
 
 	// a system to check how long connection establishment takes
 	cwg.Add(*conns)
 	go func() {
 		cwg.Wait()
 		log.Print("all connections made")
+		elapsed := time.Now().Sub(timeConnStart)
+		log.Print("Time to establish connections: ", elapsed)
 	}()
 
 	var wg sync.WaitGroup
