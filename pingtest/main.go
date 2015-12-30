@@ -94,7 +94,7 @@ func main() {
 
 	elapsed := timeEnd.Sub(timeStart)
 	totmsg := float64(*messages * 2 * *pairs)
-	msgpersec := totmsg / (float64(elapsed)/float64(time.Second))
+	msgpersec := totmsg / (float64(elapsed) / float64(time.Second))
 
 	log.Print("elapsed time: ", elapsed)
 	log.Print("messages    : ", totmsg)
@@ -168,6 +168,10 @@ func ping(i int) {
 		})
 
 		in := <-cc.Incoming
+		if in == nil {
+			break
+		}
+
 		if *dump {
 			fmt.Printf("reply: %#v\n", in)
 		}
@@ -178,8 +182,7 @@ func ping(i int) {
 		buf := &bytes.Buffer{}
 		err := in.Payload.WritePayload(buf)
 		if err != nil {
-			log.Println("payload data:", err)
-			panic("ugh")
+			log.Fatalln("payload data:", err)
 		}
 
 		if !bytes.Equal(buf.Bytes(), []byte("ok")) {

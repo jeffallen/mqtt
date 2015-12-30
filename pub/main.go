@@ -37,7 +37,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("Connected with client id ", cc.ClientId)
+	fmt.Println("Connected with client id", cc.ClientId)
 
 	cc.Publish(&proto.Publish{
 		Header:    proto.Header{Retain: *retain},

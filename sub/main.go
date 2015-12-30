@@ -43,7 +43,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("Connected with client id ", cc.ClientId)
+	fmt.Println("Connected with client id", cc.ClientId)
 	cc.Subscribe(tq)
 
 	for m := range cc.Incoming {

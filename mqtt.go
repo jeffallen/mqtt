@@ -582,6 +582,11 @@ func (c *incomingConn) reader() {
 				log.Printf("reader: no support for QoS %v yet", m.Header.QosLevel)
 				return
 			}
+			if m.Header.QosLevel != proto.QosAtMostOnce && m.MessageId == 0 {
+				// Invalid message ID. See MQTT-2.3.1-1.
+				log.Printf("reader: invalid MessageId in PUBLISH.")
+				return
+			}
 			if isWildcard(m.TopicName) {
 				log.Print("reader: ignoring PUBLISH with wildcard topic ", m.TopicName)
 			} else {
@@ -595,6 +600,11 @@ func (c *incomingConn) reader() {
 		case *proto.Subscribe:
 			if m.Header.QosLevel != proto.QosAtLeastOnce {
 				// protocol error, disconnect
+				return
+			}
+			if m.MessageId == 0 {
+				// Invalid message ID. See MQTT-2.3.1-1.
+				log.Printf("reader: invalid MessageId in SUBSCRIBE.")
 				return
 			}
 			suback := &proto.SubAck{
@@ -614,6 +624,11 @@ func (c *incomingConn) reader() {
 			}
 
 		case *proto.Unsubscribe:
+			if m.Header.QosLevel != proto.QosAtMostOnce && m.MessageId == 0 {
+				// Invalid message ID. See MQTT-2.3.1-1.
+				log.Printf("reader: invalid MessageId in UNSUBSCRIBE.")
+				return
+			}
 			for _, t := range m.Topics {
 				c.svr.subs.unsub(t, c)
 			}
@@ -719,10 +734,12 @@ const clientQueueLength = 100
 
 // A ClientConn holds all the state associated with a connection
 // to an MQTT server. It should be allocated via NewClientConn.
+// Concurrent access to a ClientConn is NOT safe.
 type ClientConn struct {
 	ClientId string              // May be set before the call to Connect.
 	Dump     bool                // When true, dump the messages in and out.
 	Incoming chan *proto.Publish // Incoming messages arrive on this channel.
+	id       uint16              // next MessageId
 	out      chan job
 	conn     net.Conn
 	done     chan struct{} // This channel will be readable once a Disconnect has been successfully sent and the connection is closed.
@@ -734,6 +751,7 @@ type ClientConn struct {
 func NewClientConn(c net.Conn) *ClientConn {
 	cc := &ClientConn{
 		conn:     c,
+		id:       1,
 		out:      make(chan job, clientQueueLength),
 		Incoming: make(chan *proto.Publish, clientQueueLength),
 		done:     make(chan struct{}),
@@ -865,12 +883,18 @@ func (c *ClientConn) Disconnect() {
 	<-c.done
 }
 
+func (c *ClientConn) nextid() uint16 {
+	id := c.id
+	c.id++
+	return id
+}
+
 // Subscribe subscribes this connection to a list of topics. Messages
 // will be delivered on the Incoming channel.
 func (c *ClientConn) Subscribe(tqs []proto.TopicQos) *proto.SubAck {
 	c.sync(&proto.Subscribe{
 		Header:    header(dupFalse, proto.QosAtLeastOnce, retainFalse),
-		MessageId: 0,
+		MessageId: c.nextid(),
 		Topics:    tqs,
 	})
 	ack := <-c.suback
@@ -883,6 +907,7 @@ func (c *ClientConn) Publish(m *proto.Publish) {
 	if m.QosLevel != proto.QosAtMostOnce {
 		panic("unsupported QoS level")
 	}
+	m.MessageId = c.nextid()
 	c.out <- job{m: m}
 }
 
