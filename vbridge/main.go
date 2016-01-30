@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/jeffallen/mqtt/vbridge/ifc"
@@ -32,34 +31,53 @@ func main() {
 	ctx, shutdown := v23.Init()
 	defer shutdown()
 
-	// Start serving.
-	bsrv := ifc.BridgeServer(makeImpl())
-	_, server, err := v23.WithNewServer(ctx, *serviceName, bsrv,
-		security.DefaultAuthorizer())
+	// Run server
+	if *to == "" {
+		// We are not the caller, so make the RPC available for the
+		// caller to call in on.
+		bsrv := ifc.BridgeServer(makeImpl())
+		_, server, err := v23.WithNewServer(ctx, *serviceName, bsrv,
+			security.DefaultAuthorizer())
 
-	if err != nil {
-		log.Panic("Error serving service: ", err)
-	}
+		if err != nil {
+			ctx.Error("Error serving service: ", err)
+			return
+		}
 
-	endpoint := server.Status().Endpoints[0]
-	fmt.Printf("Listening at: %v\n", endpoint)
+		// Wait forever.
+		<-signals.ShutdownOnSignals(ctx)
 
-	// Initiate bridge?
-	if *topics != "" {
+		endpoint := server.Status().Endpoints[0]
+		fmt.Printf("Listening at: %v\n", endpoint)
+
+	} else {
+		cc, mu, err := mqttConnect()
+		if err != nil {
+			ctx.Error("mqtt connect: ", err)
+			return
+		}
+
 		tlist := strings.Split(*topics, ",")
-
 		ifct := make([]ifc.Topic, len(tlist))
 		for i, t := range tlist {
 			ifct[i] = ifc.Topic(t)
 		}
 
-		err := receive(ctx, *to, ifct)
+		bc := ifc.BridgeClient(*to)
+		bcc, err := bc.Link(ctx, ifct)
 		if err != nil {
-			log.Println("initiate error: ", err)
+			ctx.Error(err)
+			return
 		}
-		v23.GetAppCycle(ctx).Stop(ctx)
-	}
 
-	// Wait forever.
-	<-signals.ShutdownOnSignals(ctx)
+		done := make(chan error)
+		go func() {
+			done <- transmitter(ifct, bcc.SendStream(), cc, mu)
+		}()
+		go func() {
+			done <- receiver(bcc.RecvStream(), cc, mu)
+		}()
+		<-done
+
+	}
 }

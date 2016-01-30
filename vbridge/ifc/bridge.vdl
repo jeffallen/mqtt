@@ -9,7 +9,9 @@ type Message struct {
 type Topic string
 
 type Bridge interface {
-  // Subscribes to a set of topics. All messages on those topics are
-  // returned by the stream.
-  Subscribe(topics []Topic) stream<_, Message> error
+  // Links a pair of MQTT brokers for a given set of topics. All messages on
+  // those topics received at the caller are sent on the input stream to the
+  // callee, and all messages on those topics received at the callee are
+  // sent on the output stream.
+  Link(topics []Topic) stream<Message, Message> error
 }

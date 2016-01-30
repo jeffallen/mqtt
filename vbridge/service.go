@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"time"
 
 	proto "github.com/huin/mqtt"
 	"github.com/jeffallen/mqtt"
@@ -34,63 +33,27 @@ func mqttConnect() (*mqtt.ClientConn, *sync.Mutex, error) {
 	return cc, &sync.Mutex{}, err
 }
 
-func (f *impl) Subscribe(ctx *context.T, sc ifc.BridgeSubscribeServerCall, topics []ifc.Topic) error {
-	ctx.Info("Subscribe for topics ", topics)
+func (f *impl) Link(ctx *context.T, sc ifc.BridgeLinkServerCall, topics []ifc.Topic) error {
+	ctx.Info("Link for topics ", topics)
 
-	cc, _, err := mqttConnect()
+	done := make(chan error)
+
+	cc, mu, err := mqttConnect()
 	if err != nil {
 		return err
 	}
 
-	done := make(chan error)
-
-	// Sender
+	// transmitter: do mqtt subscribe, then copy messages to output stream
 	go func() {
-		defer ctx.Info("sender exited")
-
-		suback := cc.Subscribe(tq(topics))
-
-		if len(suback.TopicsQos) != len(topics) {
-			done <- txerr(fmt.Errorf("suback has topic list length %v", len(suback.TopicsQos)))
-			return
-		}
-
-		// Since cc.Incoming is a channel, concurrent access to it is ok.
-		for m1 := range cc.Incoming {
-			if bp, ok := m1.Payload.(proto.BytesPayload); !ok {
-				done <- txerr(fmt.Errorf("payload type %T not handled", m1.Payload))
-				return
-			} else {
-				m2 := ifc.Message{
-					Topic:   m1.TopicName,
-					Payload: []byte(bp),
-				}
-				err := sc.SendStream().Send(m2)
-				if err != nil {
-					done <- txerr(err)
-					return
-				}
-			}
-		}
+		done <- transmitter(topics, sc.SendStream(), cc, mu)
 	}()
 
-	// Receiver
+	// receiver: read the input stream and copy to mqtt via cc.Publish
 	go func() {
-		defer ctx.Info("receiver exited")
-
-		remote := sc.RemoteEndpoint()
-		ctx.Info("remote: ", remote.Name())
-
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		done <- rxerr(receive(ctx, remote.Name(), topics))
+		done <- receiver(sc.RecvStream(), cc, mu)
 	}()
 
-	// Wait for either the sender or the receiver to finish.
 	err = <-done
-
-	// Now cleanup so that both goroutines are guaranteed to exit.
 
 	// Stop sender by closing cc.Incoming
 	cc.Disconnect()
@@ -108,36 +71,64 @@ func tq(topics []ifc.Topic) []proto.TopicQos {
 	return tq
 }
 
-func rxerr(err error) error {
-	return fmt.Errorf("receiver error: %v", err)
-}
 func txerr(err error) error {
-	return fmt.Errorf("sender error: %v", err)
+	return fmt.Errorf("tx err: %v", err)
 }
 
-func receive(ctx *context.T, remote string, topics []ifc.Topic) error {
-	cc, _, err := mqttConnect()
-	if err != nil {
-		return err
-	}
+func rxerr(err error) error {
+	return fmt.Errorf("rx err: %v", err)
+}
 
-	bc := ifc.BridgeClient(remote)
-	bcc, err := bc.Subscribe(ctx, topics)
-	if err != nil {
-		return err
-	}
+type rs interface {
+	Advance() bool
+	Value() ifc.Message
+	Err() error
+}
 
-	rs := bcc.RecvStream()
+func receiver(rs rs, cc *mqtt.ClientConn, mu *sync.Mutex) error {
 	for {
 		if ok := rs.Advance(); !ok {
-			return rs.Err()
+			return rxerr(rs.Err())
 		}
 		m1 := rs.Value()
 
+		mu.Lock()
 		cc.Publish(&proto.Publish{
 			Header:    proto.Header{Retain: false},
 			TopicName: string(m1.Topic),
 			Payload:   proto.BytesPayload(m1.Payload),
 		})
+		mu.Unlock()
 	}
+}
+
+type ss interface {
+	Send(item ifc.Message) error
+}
+
+func transmitter(topics []ifc.Topic, ss ss, cc *mqtt.ClientConn, mu *sync.Mutex) error {
+	mu.Lock()
+	suback := cc.Subscribe(tq(topics))
+	mu.Unlock()
+
+	if len(suback.TopicsQos) != len(topics) {
+		return txerr(fmt.Errorf("suback has topic list length %v", len(suback.TopicsQos)))
+	}
+
+	// Since cc.Incoming is a channel, concurrent access to it is ok.
+	for m1 := range cc.Incoming {
+		if bp, ok := m1.Payload.(proto.BytesPayload); !ok {
+			return txerr(fmt.Errorf("payload type %T not handled", m1.Payload))
+		} else {
+			m2 := ifc.Message{
+				Topic:   m1.TopicName,
+				Payload: []byte(bp),
+			}
+			err := ss.Send(m2)
+			if err != nil {
+				return txerr(err)
+			}
+		}
+	}
+	return nil
 }

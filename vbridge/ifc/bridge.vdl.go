@@ -6,6 +6,7 @@ package ifc
 import (
 	// VDL system imports
 	"io"
+
 	"v.io/v23"
 	"v.io/v23/context"
 	"v.io/v23/rpc"
@@ -38,9 +39,11 @@ func init() {
 // BridgeClientMethods is the client interface
 // containing Bridge methods.
 type BridgeClientMethods interface {
-	// Subscribes to a set of topics. All messages on those topics are
-	// returned by the stream.
-	Subscribe(_ *context.T, topics []Topic, _ ...rpc.CallOpt) (BridgeSubscribeClientCall, error)
+	// Links a pair of MQTT brokers for a given set of topics. All messages on
+	// those topics received at the caller are sent on the input stream to the
+	// callee, and all messages on those topics received at the callee are
+	// sent on the output stream.
+	Link(_ *context.T, topics []Topic, _ ...rpc.CallOpt) (BridgeLinkClientCall, error)
 }
 
 // BridgeClientStub adds universal methods to BridgeClientMethods.
@@ -58,18 +61,18 @@ type implBridgeClientStub struct {
 	name string
 }
 
-func (c implBridgeClientStub) Subscribe(ctx *context.T, i0 []Topic, opts ...rpc.CallOpt) (ocall BridgeSubscribeClientCall, err error) {
+func (c implBridgeClientStub) Link(ctx *context.T, i0 []Topic, opts ...rpc.CallOpt) (ocall BridgeLinkClientCall, err error) {
 	var call rpc.ClientCall
-	if call, err = v23.GetClient(ctx).StartCall(ctx, c.name, "Subscribe", []interface{}{i0}, opts...); err != nil {
+	if call, err = v23.GetClient(ctx).StartCall(ctx, c.name, "Link", []interface{}{i0}, opts...); err != nil {
 		return
 	}
-	ocall = &implBridgeSubscribeClientCall{ClientCall: call}
+	ocall = &implBridgeLinkClientCall{ClientCall: call}
 	return
 }
 
-// BridgeSubscribeClientStream is the client stream for Bridge.Subscribe.
-type BridgeSubscribeClientStream interface {
-	// RecvStream returns the receiver side of the Bridge.Subscribe client stream.
+// BridgeLinkClientStream is the client stream for Bridge.Link.
+type BridgeLinkClientStream interface {
+	// RecvStream returns the receiver side of the Bridge.Link client stream.
 	RecvStream() interface {
 		// Advance stages an item so that it may be retrieved via Value.  Returns
 		// true iff there is an item to retrieve.  Advance must be called before
@@ -81,13 +84,30 @@ type BridgeSubscribeClientStream interface {
 		// Err returns any error encountered by Advance.  Never blocks.
 		Err() error
 	}
+	// SendStream returns the send side of the Bridge.Link client stream.
+	SendStream() interface {
+		// Send places the item onto the output stream.  Returns errors
+		// encountered while sending, or if Send is called after Close or
+		// the stream has been canceled.  Blocks if there is no buffer
+		// space; will unblock when buffer space is available or after
+		// the stream has been canceled.
+		Send(item Message) error
+		// Close indicates to the server that no more items will be sent;
+		// server Recv calls will receive io.EOF after all sent items.
+		// This is an optional call - e.g. a client might call Close if it
+		// needs to continue receiving items from the server after it's
+		// done sending.  Returns errors encountered while closing, or if
+		// Close is called after the stream has been canceled.  Like Send,
+		// blocks if there is no buffer space available.
+		Close() error
+	}
 }
 
-// BridgeSubscribeClientCall represents the call returned from Bridge.Subscribe.
-type BridgeSubscribeClientCall interface {
-	BridgeSubscribeClientStream
-	// Finish blocks until the server is done, and returns the positional return
-	// values for call.
+// BridgeLinkClientCall represents the call returned from Bridge.Link.
+type BridgeLinkClientCall interface {
+	BridgeLinkClientStream
+	// Finish performs the equivalent of SendStream().Close, then blocks until
+	// the server is done, and returns the positional return values for the call.
 	//
 	// Finish returns immediately if the call has been canceled; depending on the
 	// timing the output could either be an error signaling cancelation, or the
@@ -99,39 +119,56 @@ type BridgeSubscribeClientCall interface {
 	Finish() error
 }
 
-type implBridgeSubscribeClientCall struct {
+type implBridgeLinkClientCall struct {
 	rpc.ClientCall
 	valRecv Message
 	errRecv error
 }
 
-func (c *implBridgeSubscribeClientCall) RecvStream() interface {
+func (c *implBridgeLinkClientCall) RecvStream() interface {
 	Advance() bool
 	Value() Message
 	Err() error
 } {
-	return implBridgeSubscribeClientCallRecv{c}
+	return implBridgeLinkClientCallRecv{c}
 }
 
-type implBridgeSubscribeClientCallRecv struct {
-	c *implBridgeSubscribeClientCall
+type implBridgeLinkClientCallRecv struct {
+	c *implBridgeLinkClientCall
 }
 
-func (c implBridgeSubscribeClientCallRecv) Advance() bool {
+func (c implBridgeLinkClientCallRecv) Advance() bool {
 	c.c.valRecv = Message{}
 	c.c.errRecv = c.c.Recv(&c.c.valRecv)
 	return c.c.errRecv == nil
 }
-func (c implBridgeSubscribeClientCallRecv) Value() Message {
+func (c implBridgeLinkClientCallRecv) Value() Message {
 	return c.c.valRecv
 }
-func (c implBridgeSubscribeClientCallRecv) Err() error {
+func (c implBridgeLinkClientCallRecv) Err() error {
 	if c.c.errRecv == io.EOF {
 		return nil
 	}
 	return c.c.errRecv
 }
-func (c *implBridgeSubscribeClientCall) Finish() (err error) {
+func (c *implBridgeLinkClientCall) SendStream() interface {
+	Send(item Message) error
+	Close() error
+} {
+	return implBridgeLinkClientCallSend{c}
+}
+
+type implBridgeLinkClientCallSend struct {
+	c *implBridgeLinkClientCall
+}
+
+func (c implBridgeLinkClientCallSend) Send(item Message) error {
+	return c.c.Send(item)
+}
+func (c implBridgeLinkClientCallSend) Close() error {
+	return c.c.CloseSend()
+}
+func (c *implBridgeLinkClientCall) Finish() (err error) {
 	err = c.ClientCall.Finish()
 	return
 }
@@ -139,9 +176,11 @@ func (c *implBridgeSubscribeClientCall) Finish() (err error) {
 // BridgeServerMethods is the interface a server writer
 // implements for Bridge.
 type BridgeServerMethods interface {
-	// Subscribes to a set of topics. All messages on those topics are
-	// returned by the stream.
-	Subscribe(_ *context.T, _ BridgeSubscribeServerCall, topics []Topic) error
+	// Links a pair of MQTT brokers for a given set of topics. All messages on
+	// those topics received at the caller are sent on the input stream to the
+	// callee, and all messages on those topics received at the callee are
+	// sent on the output stream.
+	Link(_ *context.T, _ BridgeLinkServerCall, topics []Topic) error
 }
 
 // BridgeServerStubMethods is the server interface containing
@@ -149,9 +188,11 @@ type BridgeServerMethods interface {
 // The only difference between this interface and BridgeServerMethods
 // is the streaming methods.
 type BridgeServerStubMethods interface {
-	// Subscribes to a set of topics. All messages on those topics are
-	// returned by the stream.
-	Subscribe(_ *context.T, _ *BridgeSubscribeServerCallStub, topics []Topic) error
+	// Links a pair of MQTT brokers for a given set of topics. All messages on
+	// those topics received at the caller are sent on the input stream to the
+	// callee, and all messages on those topics received at the callee are
+	// sent on the output stream.
+	Link(_ *context.T, _ *BridgeLinkServerCallStub, topics []Topic) error
 }
 
 // BridgeServerStub adds universal methods to BridgeServerStubMethods.
@@ -183,8 +224,8 @@ type implBridgeServerStub struct {
 	gs   *rpc.GlobState
 }
 
-func (s implBridgeServerStub) Subscribe(ctx *context.T, call *BridgeSubscribeServerCallStub, i0 []Topic) error {
-	return s.impl.Subscribe(ctx, call, i0)
+func (s implBridgeServerStub) Link(ctx *context.T, call *BridgeLinkServerCallStub, i0 []Topic) error {
+	return s.impl.Link(ctx, call, i0)
 }
 
 func (s implBridgeServerStub) Globber() *rpc.GlobState {
@@ -204,8 +245,8 @@ var descBridge = rpc.InterfaceDesc{
 	PkgPath: "github.com/jeffallen/mqtt/vbridge/ifc",
 	Methods: []rpc.MethodDesc{
 		{
-			Name: "Subscribe",
-			Doc:  "// Subscribes to a set of topics. All messages on those topics are\n// returned by the stream.",
+			Name: "Link",
+			Doc:  "// Links a pair of MQTT brokers for a given set of topics. All messages on\n// those topics received at the caller are sent on the input stream to the\n// callee, and all messages on those topics received at the callee are\n// sent on the output stream.",
 			InArgs: []rpc.ArgDesc{
 				{"topics", ``}, // []Topic
 			},
@@ -213,9 +254,21 @@ var descBridge = rpc.InterfaceDesc{
 	},
 }
 
-// BridgeSubscribeServerStream is the server stream for Bridge.Subscribe.
-type BridgeSubscribeServerStream interface {
-	// SendStream returns the send side of the Bridge.Subscribe server stream.
+// BridgeLinkServerStream is the server stream for Bridge.Link.
+type BridgeLinkServerStream interface {
+	// RecvStream returns the receiver side of the Bridge.Link server stream.
+	RecvStream() interface {
+		// Advance stages an item so that it may be retrieved via Value.  Returns
+		// true iff there is an item to retrieve.  Advance must be called before
+		// Value is called.  May block if an item is not available.
+		Advance() bool
+		// Value returns the item that was staged by Advance.  May panic if Advance
+		// returned false or was not called.  Never blocks.
+		Value() Message
+		// Err returns any error encountered by Advance.  Never blocks.
+		Err() error
+	}
+	// SendStream returns the send side of the Bridge.Link server stream.
 	SendStream() interface {
 		// Send places the item onto the output stream.  Returns errors encountered
 		// while sending.  Blocks if there is no buffer space; will unblock when
@@ -224,34 +277,64 @@ type BridgeSubscribeServerStream interface {
 	}
 }
 
-// BridgeSubscribeServerCall represents the context passed to Bridge.Subscribe.
-type BridgeSubscribeServerCall interface {
+// BridgeLinkServerCall represents the context passed to Bridge.Link.
+type BridgeLinkServerCall interface {
 	rpc.ServerCall
-	BridgeSubscribeServerStream
+	BridgeLinkServerStream
 }
 
-// BridgeSubscribeServerCallStub is a wrapper that converts rpc.StreamServerCall into
-// a typesafe stub that implements BridgeSubscribeServerCall.
-type BridgeSubscribeServerCallStub struct {
+// BridgeLinkServerCallStub is a wrapper that converts rpc.StreamServerCall into
+// a typesafe stub that implements BridgeLinkServerCall.
+type BridgeLinkServerCallStub struct {
 	rpc.StreamServerCall
+	valRecv Message
+	errRecv error
 }
 
-// Init initializes BridgeSubscribeServerCallStub from rpc.StreamServerCall.
-func (s *BridgeSubscribeServerCallStub) Init(call rpc.StreamServerCall) {
+// Init initializes BridgeLinkServerCallStub from rpc.StreamServerCall.
+func (s *BridgeLinkServerCallStub) Init(call rpc.StreamServerCall) {
 	s.StreamServerCall = call
 }
 
-// SendStream returns the send side of the Bridge.Subscribe server stream.
-func (s *BridgeSubscribeServerCallStub) SendStream() interface {
+// RecvStream returns the receiver side of the Bridge.Link server stream.
+func (s *BridgeLinkServerCallStub) RecvStream() interface {
+	Advance() bool
+	Value() Message
+	Err() error
+} {
+	return implBridgeLinkServerCallRecv{s}
+}
+
+type implBridgeLinkServerCallRecv struct {
+	s *BridgeLinkServerCallStub
+}
+
+func (s implBridgeLinkServerCallRecv) Advance() bool {
+	s.s.valRecv = Message{}
+	s.s.errRecv = s.s.Recv(&s.s.valRecv)
+	return s.s.errRecv == nil
+}
+func (s implBridgeLinkServerCallRecv) Value() Message {
+	return s.s.valRecv
+}
+func (s implBridgeLinkServerCallRecv) Err() error {
+	if s.s.errRecv == io.EOF {
+		return nil
+	}
+	return s.s.errRecv
+}
+
+// SendStream returns the send side of the Bridge.Link server stream.
+func (s *BridgeLinkServerCallStub) SendStream() interface {
 	Send(item Message) error
 } {
-	return implBridgeSubscribeServerCallSend{s}
+	return implBridgeLinkServerCallSend{s}
 }
 
-type implBridgeSubscribeServerCallSend struct {
-	s *BridgeSubscribeServerCallStub
+type implBridgeLinkServerCallSend struct {
+	s *BridgeLinkServerCallStub
 }
 
-func (s implBridgeSubscribeServerCallSend) Send(item Message) error {
+func (s implBridgeLinkServerCallSend) Send(item Message) error {
 	return s.s.Send(item)
 }
