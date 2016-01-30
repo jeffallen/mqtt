@@ -1,66 +1,19 @@
 package main
 
 import (
-	"github.com/jeffallen/mqtt"
+	"flag"
 	"log"
 	"net"
-	"net/http"
-	_ "net/http/pprof"
+
+	"github.com/jeffallen/mqtt"
 )
 
-type mlRes struct {
-	conn net.Conn
-	err  error
-}
-
-type multiListener struct {
-	listeners []net.Listener
-	next      chan mlRes
-}
-
-func newMultiListener(l ...net.Listener) *multiListener {
-	ml := &multiListener{
-		listeners: make([]net.Listener, len(l)),
-		next:      make(chan mlRes, len(l)),
-	}
-	copy(ml.listeners, l)
-
-	for _, l := range ml.listeners {
-		go func(l net.Listener, next chan mlRes) {
-			for {
-				res := mlRes{}
-				res.conn, res.err = l.Accept()
-				next <- res
-			}
-		}(l, ml.next)
-	}
-
-	return ml
-}
-
-func (ml *multiListener) Accept() (net.Conn, error) {
-	res := <-ml.next
-	return res.conn, res.err
-}
-
-func (ml *multiListener) Close() error {
-	for _, l := range ml.listeners {
-		l.Close()
-	}
-	return nil
-}
-
-func (ml *multiListener) Addr() net.Addr {
-	return ml.listeners[0].Addr()
-}
+var addr = flag.String("addr", "localhost:1883", "listen address of broker")
 
 func main() {
-	// see godoc net/http/pprof
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
+	flag.Parse()
 
-	l, err := net.Listen("tcp", ":1883")
+	l, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Print("listen: ", err)
 		return

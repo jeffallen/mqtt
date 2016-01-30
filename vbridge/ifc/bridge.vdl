@@ -1,0 +1,15 @@
+package ifc
+
+type Message struct {
+     Topic string
+     MessageId uint16
+     Payload []byte
+}
+
+type Topic string
+
+type Bridge interface {
+  // Subscribes to a set of topics. All messages on those topics are
+  // returned by the stream.
+  Subscribe(topics []Topic) stream<_, Message> error
+}

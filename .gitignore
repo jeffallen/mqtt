@@ -6,3 +6,5 @@ sub/sub
 smqttsrv/server.crt
 smqttsrv/server.key
 smqttsrv/smqttsrv
+mqttsrv/mqttsrv
+vbridge/vbridge
