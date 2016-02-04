@@ -36,7 +36,7 @@ func mqttConnect() (*mqtt.ClientConn, *sync.Mutex, error) {
 func (f *impl) Link(ctx *context.T, sc ifc.BridgeLinkServerCall, topics []ifc.Topic) error {
 	ctx.Info("Link for topics ", topics)
 
-	done := make(chan error)
+	done := make(chan error, 2)
 
 	cc, mu, err := mqttConnect()
 	if err != nil {
@@ -58,7 +58,6 @@ func (f *impl) Link(ctx *context.T, sc ifc.BridgeLinkServerCall, topics []ifc.To
 	// Stop sender by closing cc.Incoming
 	cc.Disconnect()
 
-	ctx.Info("done with err = ", err)
 	return err
 }
 

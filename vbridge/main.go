@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/jeffallen/mqtt/vbridge/ifc"
@@ -44,12 +45,11 @@ func main() {
 			return
 		}
 
-		// Wait forever.
-		<-signals.ShutdownOnSignals(ctx)
-
 		endpoint := server.Status().Endpoints[0]
 		fmt.Printf("Listening at: %v\n", endpoint)
 
+		// Wait forever.
+		<-signals.ShutdownOnSignals(ctx)
 	} else {
 		cc, mu, err := mqttConnect()
 		if err != nil {
@@ -64,20 +64,26 @@ func main() {
 		}
 
 		bc := ifc.BridgeClient(*to)
+//		timeout := options.ChannelTimeout(2 * time.Second)
 		bcc, err := bc.Link(ctx, ifct)
 		if err != nil {
 			ctx.Error(err)
 			return
 		}
 
-		done := make(chan error)
+		done := make(chan error, 2)
 		go func() {
 			done <- transmitter(ifct, bcc.SendStream(), cc, mu)
+			println("send done")
 		}()
 		go func() {
 			done <- receiver(bcc.RecvStream(), cc, mu)
+			println("recv done")
 		}()
-		<-done
+		err = <-done
+		log.Print("Stopped with error ", err)
 
+		// Stop sender by closing cc.Incoming
+		cc.Disconnect()
 	}
 }
