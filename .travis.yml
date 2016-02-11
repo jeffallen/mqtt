@@ -1,5 +1,7 @@
 language: go
 
 go:
-  - 1.5
-  - tip
+  - 1.5.3
+
+script: go test -tags noopenssl ./...
+
