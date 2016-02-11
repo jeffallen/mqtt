@@ -42,8 +42,6 @@ which two Vanadium service names it should be linking. There's no
 practical difference between to and from, they are just two flags to
 make it clearer what's happening.
 
-(pipe mode is not yet implemented)
-
 Echoing
 -------
 
@@ -73,8 +71,8 @@ The following set of commands shows the system working:
     mqttsrv/mqttsrv -addr :1884 &
     ticktock/ticktock -host :1883 -who bonnie &
     ticktock/ticktock -host :1884 -who clyde &
-    vbridge/vbridge -service-name tmp/$USER/vbridge -host :1883 &
-    vbridge/vbridge -to tmp/$USER/vbridge -host :1884
+    vbridge/vbridge -service-name tmp/$USER/vbridge -host :1883 -topics tick &
+    vbridge/vbridge -to tmp/$USER/vbridge -host :1884 -topics tick
 
 (You might want to run the ticktocks in two windows, to see
 separately what each of them is saying.)
@@ -97,3 +95,14 @@ MQTT server, this demonstrates that the bridge is functioning.
 
 If you stop and start the client vbridge, the messages stop
 and start in the ticktocks.
+
+Issues to resolve
+-----------------
+
+Timeouts are not yet handled as expected. There needs to be a
+timeout on the call to Send(), since it is designed to block.
+
+It is unclear if the ChannelTimeout is supposed to break the
+underlying connection and cause Send() return an error. In any
+case, it doesn't work; suspending one vbridge does not make
+the other one exit as expected.
