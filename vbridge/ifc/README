@@ -1,0 +1,3 @@
+Generate the go file with:
+
+VDLPATH=$HOME/src vdl generate github.com/jeffallen/mqtt/vbridge/ifc

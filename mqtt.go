@@ -106,7 +106,7 @@ type retain struct {
 
 type subscriptions struct {
 	workers int
-	posts   chan (post)
+	posts   chan post
 
 	mu        sync.Mutex // guards access to fields below
 	subs      map[string][]*incomingConn
@@ -293,6 +293,11 @@ func (s *subscriptions) run(id int) {
 
 		// Queue the outgoing messages
 		for _, c := range conns {
+			// Do not echo messages back to where they came from.
+			if c == post.c {
+				continue
+			}
+
 			if c != nil {
 				c.submit(post.m)
 			}
