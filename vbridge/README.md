@@ -1,7 +1,7 @@
 Vbridge
 =======
 
-Vbridge is a bridge for message brokers which uses [Vanadium] (https://v.io)
+Vbridge is a bridge for message brokers which uses [Vanadium] (https://vanadium.github.io)
 for RPC that can securely and reliably cross network borders.
 
 Vbridge uses Vanadium's input and output streams to move MQTT messages
