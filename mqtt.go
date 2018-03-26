@@ -431,14 +431,14 @@ func (c *incomingConn) start() {
 	go c.writer()
 }
 
-// Add this	connection to the map, or find out that an existing connection
+// Add this connection to the map, or find out that an existing connection
 // already exists for the same client-id.
 func (c *incomingConn) add() *incomingConn {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 
 	existing, ok := clients[c.clientid]
-	if !ok {
+	if ok {
 		// this client id already exists, return it
 		return existing
 	}
@@ -447,11 +447,11 @@ func (c *incomingConn) add() *incomingConn {
 	return nil
 }
 
-// Delete a connection; the conection must be closed by the caller first.
+// Delete a connection; the connection must be closed by the caller first.
 func (c *incomingConn) del() {
 	clientsMu.Lock()
-	defer clientsMu.Unlock()
 	delete(clients, c.clientid)
+	clientsMu.Unlock()
 	return
 }
 
@@ -472,7 +472,7 @@ func (c *incomingConn) replace() {
 				die = true
 			}
 		default:
-			die = true
+			die = false
 		}
 		if die {
 			panic("attempting to replace a connection that is not closed")
@@ -557,9 +557,8 @@ func (c *incomingConn) reader() {
 				disconnect := &proto.Disconnect{}
 				r := existing.submitSync(disconnect)
 				r.wait()
-				existing.del()
 			}
-			c.add()
+			c.replace()
 
 			// TODO: Last will
 
