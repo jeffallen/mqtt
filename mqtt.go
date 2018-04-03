@@ -455,36 +455,6 @@ func (c *incomingConn) del() {
 	return
 }
 
-// Replace any existing connection with this one. The one to be replaced,
-// if any, must be closed first by the caller.
-func (c *incomingConn) replace() {
-	clientsMu.Lock()
-	defer clientsMu.Unlock()
-
-	// Check that any existing connection is already closed.
-	existing, ok := clients[c.clientid]
-	if ok {
-		die := false
-		select {
-		case _, ok := <-existing.jobs:
-			// what? we are expecting that this channel is closed!
-			if ok {
-				die = true
-			}
-		default:
-			die = false
-		}
-		if die {
-			panic("attempting to replace a connection that is not closed")
-		}
-
-		delete(clients, c.clientid)
-	}
-
-	clients[c.clientid] = c
-	return
-}
-
 // Queue a message; no notification of sending is done.
 func (c *incomingConn) submit(m proto.Message) {
 	j := job{m: m}
@@ -557,8 +527,8 @@ func (c *incomingConn) reader() {
 				disconnect := &proto.Disconnect{}
 				r := existing.submitSync(disconnect)
 				r.wait()
+				c.add()
 			}
-			c.replace()
 
 			// TODO: Last will
 
