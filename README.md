@@ -33,8 +33,3 @@ pingtest simulates a number of pairs of clients who are bouncing messages betwee
 loadtest simulates a number of pairs of clients where one is sending as fast as possible to the other. Realistically, this ends up testing the ability of the system to decode and queue messages, because any slight inbalance in scheduling of readers causes a pile up of messages from the writer slamming them down the throat of the server.
 
 many simulates a large number of clients who send a low transaction rate. The goal is to eventually use this to achieve 1 million (and more?) concurrent, active MQTT sessions in one server. So far, <tt>mqttsrv</tt> has survived a load of 40k concurrent connections from <tt>many</tt>.
-
-Travis Build
-------------
-
-![build status](https://travis-ci.org/jeffallen/mqtt.svg?branch=master)
