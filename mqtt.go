@@ -566,7 +566,7 @@ func (c *incomingConn) reader() {
 			} else {
 				c.svr.subs.submit(c, m)
 			}
-			c.submit(&proto.PubAck{MessageId: m.MessageId})
+			//c.submit(&proto.PubAck{MessageId: m.MessageId})
 
 		case *proto.PingReq:
 			c.submit(&proto.PingResp{})
